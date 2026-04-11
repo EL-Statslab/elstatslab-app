@@ -26,7 +26,7 @@ from PIL import Image
 _PUBLIC_DB = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
 DB_PATH = _PUBLIC_DB if _PUBLIC_DB.exists() else _LOCAL_DB
-LOGOS_DIR = Path("logos")
+LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
 CURRENT_SEASON = 2025
