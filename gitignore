@@ -1,0 +1,28 @@
+# Keep the original full historical DB OUT of GitHub
+euroleague.db
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Temporary exploration scripts
+explore_db.py
+check_schema.py
+check_schema2.py
+check_codes.py
+check_playoffs.py
