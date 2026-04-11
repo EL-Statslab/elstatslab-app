@@ -426,7 +426,7 @@ def render_team_header(code: str, display_name: str,
         rk = standings_row.get("rank", "?")
         w = int(standings_row.get("wins", 0))
         l = int(standings_row.get("losses", 0))
-        standings_text = f"#{rk} · {w}W {l}L"
+        standings_text = f"{w}W {l}L"
     else:
         standings_text = ""
 
@@ -545,7 +545,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
         # Rank + W-L
-        ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
+        ax_head.text(x_center, 0.20, f"{wl}",
                      ha="center", va="top", fontsize=11, color="#555555")
         # Sparkline below standings, centered on x_center
         if form:
