@@ -26,7 +26,7 @@ from PIL import Image
 _PUBLIC_DB = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
 DB_PATH = _PUBLIC_DB if _PUBLIC_DB.exists() else _LOCAL_DB
-LOGOS_DIR = Path("logos")
+LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
 CURRENT_SEASON = 2025
@@ -440,28 +440,21 @@ def render_team_header(code: str, display_name: str,
                 f"background:{colour};margin-right:3px;border-radius:2px;'></span>"
             )
 
-    # Single HTML block with strict layout
-    html = f"""
-    <div style='display:flex; flex-direction:column; align-items:center;
-                font-family:sans-serif;'>
-        <div style='height:140px; display:flex; align-items:center;
-                    justify-content:center; width:100%;'>
-            {logo_html}
-        </div>
-        <div style='font-weight:bold; font-size:1rem; text-align:center;
-                    min-height:48px; line-height:1.2; margin-top:8px;
-                    display:flex; align-items:center; justify-content:center;'>
-            {display_name}
-        </div>
-        <div style='color:#888; font-size:0.85rem; height:22px;
-                    text-align:center; margin-top:4px;'>
-            {standings_text}
-        </div>
-        <div style='height:20px; text-align:center; margin-top:4px;'>
-            {squares}
-        </div>
-    </div>
-    """
+    # Single HTML block with strict layout (no indentation to avoid markdown code block)
+    html = (
+        "<div style='display:flex;flex-direction:column;align-items:center;"
+        "font-family:sans-serif;'>"
+        "<div style='height:140px;display:flex;align-items:center;"
+        f"justify-content:center;width:100%;'>{logo_html}</div>"
+        "<div style='font-weight:bold;font-size:1rem;text-align:center;"
+        "min-height:48px;line-height:1.2;margin-top:8px;display:flex;"
+        f"align-items:center;justify-content:center;'>{display_name}</div>"
+        "<div style='color:#888;font-size:0.85rem;height:22px;"
+        f"text-align:center;margin-top:4px;'>{standings_text}</div>"
+        "<div style='height:20px;text-align:center;margin-top:4px;'>"
+        f"{squares}</div>"
+        "</div>"
+    )
     st.markdown(html, unsafe_allow_html=True)
 
 
