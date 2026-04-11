@@ -26,7 +26,7 @@ from PIL import Image
 _PUBLIC_DB = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
 DB_PATH = _PUBLIC_DB if _PUBLIC_DB.exists() else _LOCAL_DB
-LOGOS_DIR = Path("Logos")
+LOGOS_DIR = Path("logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
 CURRENT_SEASON = 2025
@@ -327,28 +327,66 @@ def gradient_colour(intensity: float) -> str:
 
 def render_comparison_styled(label: str, home: str, away: str,
                               h_stats: dict, a_stats: dict):
+    """
+    Render a stat comparison table as pure HTML so it:
+    - Stays fixed (no draggable columns like st.dataframe)
+    - Adapts naturally to mobile via CSS
+    - Keeps the gradient colour coding
+    """
     st.markdown(f"**{label}**")
     if not h_stats or not a_stats:
         st.info("Not enough games yet for this scope.")
         return
-    rows = []
+
+    def bg(intensity):
+        if intensity >= 0:
+            alpha = min(0.55, intensity * 0.6)
+            return f"rgba(46, 160, 67, {alpha:.3f})"
+        alpha = min(0.55, -intensity * 0.6)
+        return f"rgba(218, 54, 51, {alpha:.3f})"
+
+    rows_html = ""
     for m in METRICS:
         hv = h_stats.get(m)
         av = a_stats.get(m)
-        diff = f"{hv - av:+.1f}" if (hv is not None and av is not None) else ""
-        rows.append({home: hv, "Metric": m, away: av, "Δ": diff})
-    df = pd.DataFrame(rows)[[home, "Metric", away, "Δ"]]
-
-    def style_row(row):
-        m = row["Metric"]
-        hv, av = row[home], row[away]
         h_int, a_int = colour_intensity(hv, av, m)
-        return [gradient_colour(h_int), "", gradient_colour(a_int), ""]
+        hv_s = f"{hv:.1f}" if hv is not None else "-"
+        av_s = f"{av:.1f}" if av is not None else "-"
+        diff = f"{hv - av:+.1f}" if (hv is not None and av is not None) else ""
+        rows_html += (
+            f"<tr>"
+            f"<td style='background:{bg(h_int)};padding:8px 6px;text-align:center;"
+            f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{hv_s}</td>"
+            f"<td style='background:#f5f5f5;padding:8px 6px;text-align:center;"
+            f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
+            f"<td style='background:{bg(a_int)};padding:8px 6px;text-align:center;"
+            f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{av_s}</td>"
+            f"<td style='padding:8px 6px;text-align:center;color:#888;"
+            f"font-size:0.85rem;border-bottom:1px solid #eee;'>{diff}</td>"
+            f"</tr>"
+        )
 
-    styled = df.style.apply(style_row, axis=1).format(
-        {home: "{:.1f}", away: "{:.1f}"}, na_rep="-"
+    table_html = (
+        "<div style='width:100%;overflow-x:auto;'>"
+        "<table style='width:100%;border-collapse:collapse;table-layout:fixed;"
+        "font-family:sans-serif;font-size:0.9rem;'>"
+        "<thead><tr>"
+        f"<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
+        f"font-weight:600;width:30%;border-bottom:2px solid #ddd;white-space:nowrap;"
+        f"overflow:hidden;text-overflow:ellipsis;'>{home}</th>"
+        "<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
+        "font-weight:600;width:18%;border-bottom:2px solid #ddd;'>Metric</th>"
+        f"<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
+        f"font-weight:600;width:30%;border-bottom:2px solid #ddd;white-space:nowrap;"
+        f"overflow:hidden;text-overflow:ellipsis;'>{away}</th>"
+        "<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
+        "font-weight:600;width:22%;border-bottom:2px solid #ddd;'>Δ</th>"
+        "</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        "</table>"
+        "</div>"
     )
-    st.dataframe(styled, hide_index=True, width="stretch")
+    st.markdown(table_html, unsafe_allow_html=True)
 
 
 def render_team_header(code: str, display_name: str,
