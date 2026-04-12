@@ -238,6 +238,15 @@ def team_form_sequence(all_games: pd.DataFrame, team: str,
     return [bool(row.score > row.opp_score) for row in sub.itertuples()]
 
 
+def team_single_game_stats(all_games: pd.DataFrame, team: str,
+                           gameday: int) -> dict:
+    """Stats for one specific match (used in 'This Game' tab for played matches)."""
+    mask = (all_games["team"].str.upper() == team.upper()) & \
+           (all_games["gameday"] == gameday)
+    sub = all_games[mask]
+    return aggregate_stats(sub)
+
+
 # =============================================================================
 # PREDICTION MODEL
 # =============================================================================
@@ -358,7 +367,7 @@ def render_comparison_styled(label: str, home: str, away: str,
             f"<td style='background:{bg(h_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{hv_s}</td>"
             f"<td style='background:#f5f5f5;padding:8px 6px;text-align:center;"
-            f"color:#555;border-bottom:1px solid #eee;white-space:nowrap;'>{m}</td>"
+            f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
             f"<td style='background:{bg(a_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{av_s}</td>"
             f"<td style='padding:8px 6px;text-align:center;color:#888;"
@@ -426,7 +435,7 @@ def render_team_header(code: str, display_name: str,
         rk = standings_row.get("rank", "?")
         w = int(standings_row.get("wins", 0))
         l = int(standings_row.get("losses", 0))
-        standings_text = f"{w}W {l}L"
+        standings_text = f"#{rk} · {w}W {l}L"
     else:
         standings_text = ""
 
@@ -480,10 +489,11 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       away_code: str, away_name: str, away_rank: int,
                       away_wl: str, away_form: list[bool],
                       h_season: dict, a_season: dict,
-                      h_recent: dict, a_recent: dict,
+                      h_right: dict, a_right: dict,
                       home_prob: float, away_prob: float,
                       round_label: str,
-                      show_prediction: bool = True) -> bytes:
+                      show_prediction: bool = True,
+                      right_label: str = "Last 5") -> bytes:
     """
     Build a square 1200x1200 PNG with logos, standings, form, both stat tables
     (Season + Last 5) with gradient colouring, and win probabilities.
@@ -545,7 +555,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
         # Rank + W-L
-        ax_head.text(x_center, 0.20, f"{wl}",
+        ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
                      ha="center", va="top", fontsize=11, color="#555555")
         # Sparkline below standings, centered on x_center
         if form:
@@ -639,9 +649,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_season = fig.add_subplot(gs[2, 0])
     draw_table(ax_season, "Season", h_season, a_season, home_name, away_name)
 
-    ax_last5 = fig.add_subplot(gs[2, 1])
-    draw_table(ax_last5, f"Last {ROLLING_WINDOW}", h_recent, a_recent,
-               home_name, away_name)
+    ax_right = fig.add_subplot(gs[2, 1])
+    draw_table(ax_right, right_label, h_right, a_right, home_name, away_name)
 
     # --- Win probability bar ---
     ax_prob = fig.add_subplot(gs[3, :])
@@ -804,9 +813,16 @@ def main():
                 render_comparison_styled("Season", home_disp, away_disp,
                                          h_season, a_season)
             with col2:
-                render_comparison_styled(f"Last {ROLLING_WINDOW}",
-                                         home_disp, away_disp,
-                                         h_recent, a_recent)
+                if played:
+                    h_game = team_single_game_stats(all_games, home, int(rnd))
+                    a_game = team_single_game_stats(all_games, away, int(rnd))
+                    render_comparison_styled("This Game",
+                                             home_disp, away_disp,
+                                             h_game, a_game)
+                else:
+                    render_comparison_styled(f"Last {ROLLING_WINDOW}",
+                                             home_disp, away_disp,
+                                             h_recent, a_recent)
 
             pred = predict_home_win_pct(standings_scope, home, away,
                                         h_recent, a_recent)
@@ -851,6 +867,17 @@ def main():
                             rl = f"{PHASE_LABELS.get(phase, phase)} Round {rnd}"
                         else:
                             rl = f"Round {rnd}"
+                        # Decide what goes in the right table
+                        if played:
+                            h_right_data = team_single_game_stats(
+                                all_games, home, int(rnd))
+                            a_right_data = team_single_game_stats(
+                                all_games, away, int(rnd))
+                            right_lbl = "This Game"
+                        else:
+                            h_right_data = h_recent
+                            a_right_data = a_recent
+                            right_lbl = f"Last {ROLLING_WINDOW}"
                         st.session_state[png_key] = build_preview_png(
                             home_code=hcode, home_name=home_disp,
                             home_rank=int(h_season["rank"]),
@@ -863,11 +890,12 @@ def main():
                                     f"{int(a_season['losses'])}L",
                             away_form=a_form,
                             h_season=h_season, a_season=a_season,
-                            h_recent=h_recent, a_recent=a_recent,
+                            h_right=h_right_data, a_right=a_right_data,
                             home_prob=pred["home_prob"],
                             away_prob=pred["away_prob"],
                             round_label=rl,
                             show_prediction=not is_postseason,
+                            right_label=right_lbl,
                         )
                     st.rerun()
 
