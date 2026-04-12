@@ -367,7 +367,7 @@ def render_comparison_styled(label: str, home: str, away: str,
             f"<td style='background:{bg(h_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{hv_s}</td>"
             f"<td style='background:#f5f5f5;padding:8px 6px;text-align:center;"
-            f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
+            f"color:#555;border-bottom:1px solid #eee;white-space:nowrap;'>{m}</td>"
             f"<td style='background:{bg(a_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{av_s}</td>"
             f"<td style='padding:8px 6px;text-align:center;color:#888;"
@@ -913,14 +913,15 @@ def main():
     with st.expander("ℹ️ About ELSTATSLAB Match Center"):
         st.markdown(
             """
-            **ELSTATSLAB Match Center** is an independent EuroLeague analytics
+            
+           **ELSTATSLAB Match Center** is an independent EuroLeague analytics
             tool that lets you compare any matchup of the season at a glance.
 
-            For each game you can explore:
-            - Both teams' season long efficiency profile (ORTG, DRTG, NETRTG, REB%, AST%)
-            - Their form over the last 5 games
-            - Standings, win-loss record and recent results
-            - A win probability estimate during the regular season
+            For upcoming games, you get a season profile, recent form (last 5 games),
+            and a win probability estimate.
+
+            For played games, the right column switches to "This Game" so you can
+            see how each team performed compared to their season average.
 
             Built and maintained by **[@EL_Statslab](https://twitter.com/EL_Statslab)**,
             an independent EuroLeague analytics project sharing daily insights
