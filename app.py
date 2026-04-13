@@ -140,7 +140,7 @@ def load_team_games(season: int) -> pd.DataFrame:
     q = """
         SELECT
             s.gameday,
-            s.date
+            s.date,
             ts.GameCode  AS gamecode_num,
             ts.TeamName  AS team,
             CASE WHEN UPPER(s.hometeam) = UPPER(ts.TeamName)
