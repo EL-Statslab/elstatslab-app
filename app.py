@@ -154,7 +154,12 @@ def load_team_games(season: int) -> pd.DataFrame:
             opp.Reb_Off  AS opp_oreb,
             opp.Reb_Def  AS opp_dreb,
             ts.Ast       AS ast,
-            (COALESCE(ts."2PM", 0) + COALESCE(ts."3PM", 0)) AS fgm
+            (COALESCE(ts."2PM", 0) + COALESCE(ts."3PM", 0)) AS fgm,
+            ts."2PM"     AS twopm,
+            ts."3PM"     AS threepm,
+            ts."2PA"     AS twopa,
+            ts."3PA"     AS threepa,
+            ts.Turnovers AS tov
         FROM team_stats ts
         JOIN team_stats opp
           ON opp.GameCode = ts.GameCode
@@ -184,6 +189,11 @@ def aggregate_stats(df: pd.DataFrame) -> dict:
     o_dreb = df["opp_dreb"].sum()
     ast    = df["ast"].sum()
     fgm    = df["fgm"].sum()
+    twopm  = df["twopm"].sum()
+    threepm = df["threepm"].sum()
+    twopa  = df["twopa"].sum()
+    threepa = df["threepa"].sum()
+    tov    = df["tov"].sum()
     wins   = int((df["score"] > df["opp_score"]).sum())
     games  = len(df)
 
@@ -199,9 +209,10 @@ def aggregate_stats(df: pd.DataFrame) -> dict:
         "DRTG":   safe(pa, poss),
         "NETRTG": safe(pts - pa, poss),
         "OREB%":  safe(oreb, oreb + o_dreb),
-        "DREB%":  safe(dreb, dreb + o_oreb),
         "REB%":   safe(oreb + dreb, oreb + dreb + o_oreb + o_dreb),
         "AST%":   safe(ast, fgm),
+        "eFG%":   safe(twopm + 1.5 * threepm, twopa + threepa),
+        "TOV%":   safe(tov, poss),
     }
 
 
@@ -288,7 +299,7 @@ def predict_home_win_pct(standings: pd.DataFrame,
 # =============================================================================
 # VISUAL HELPERS
 # =============================================================================
-METRICS = ["ORTG", "DRTG", "NETRTG", "OREB%", "DREB%", "REB%", "AST%"]
+METRICS = ["ORTG", "DRTG", "NETRTG", "OREB%", "REB%", "AST%", "eFG%", "TOV%"]
 
 # Reference scales (one standard deviation of the metric at team level in EL)
 # These normalize the gap to decide colour intensity.
@@ -297,13 +308,14 @@ METRIC_SCALE = {
     "DRTG":   8.0,
     "NETRTG": 10.0,
     "OREB%":  5.0,
-    "DREB%":  4.0,
     "REB%":   4.0,
     "AST%":   6.0,
+    "eFG%":   4.0,
+    "TOV%":   2.5,
 }
 
 # For DRTG lower is better. For everything else higher is better.
-LOWER_IS_BETTER = {"DRTG"}
+LOWER_IS_BETTER = {"DRTG", "TOV%"}
 
 
 def colour_intensity(hv, av, metric: str) -> tuple[float, float]:
@@ -911,7 +923,40 @@ def main():
                 )
 
     st.divider()
+    
+with st.expander("📖 How to read the stats"):
+        st.markdown("""
+    *Section 1* : **Efficiency Ratings**
+                    
+**ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better. A top-tier EuroLeague offense typically runs between 115 and 122.                
+**DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better. A top-tier EuroLeague defense typically runs between 105 and 112.                
+**NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better. A NETRTG above +5 usually indicates a playoff-caliber team.                 
 
+                    
+*Section 2* : **Shooting and Ball Control**
+                    
+**eFG% (Effective Field Goal Percentage)** : Shooting efficiency that accounts for the extra value of three-pointers. Formula: (2PM + 1.5 × 3PM) / FGA. Higher is better. Top EuroLeague teams sit around 55% eFG.               
+**TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better. A disciplined team stays below 13% TOV.             
+**AST% (Assist Percentage)** : Share of made field goals created from an assist. Higher is better. Teams with strong ball movement exceed 65% AST.               
+
+                     
+*Section 3* : **Rebounding**
+                    
+**OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed by the team. Higher is better. Elite offensive rebounding teams reach 32% and above.            
+**REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed by the team. Higher is better. A balanced team sits around 50%.            
+
+                
+*Section 4* : **How to read the tables**
+                    
+The comparison tables show two teams side by side across the same 8 metrics. For each row, both values are color-coded based on which team leads in that area:
+
+**Green** means this team has the advantage. The more intense the green, the bigger the advantage.
+**Red** means this team trails. The more intense the red, the bigger the gap.
+**White** means the two teams are essentially equal on this metric.
+
+The right-hand table switches automatically: for upcoming games it shows each team's last 5 games average, for played games it shows the actual game stats compared against each team's season average.
+    """)
+    
     with st.expander("ℹ️ About ELSTATSLAB Match Center"):
         st.markdown(
             """
