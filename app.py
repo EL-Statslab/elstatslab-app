@@ -140,6 +140,7 @@ def load_team_games(season: int) -> pd.DataFrame:
     q = """
         SELECT
             s.gameday,
+            s.date
             ts.GameCode  AS gamecode_num,
             ts.TeamName  AS team,
             CASE WHEN UPPER(s.hometeam) = UPPER(ts.TeamName)
@@ -167,6 +168,7 @@ def load_team_games(season: int) -> pd.DataFrame:
         WHERE s.Season = ? AND s.played = 'true'
     """
     df = pd.read_sql(q, get_conn(), params=(season,))
+    df["date"] = pd.to_datetime(df["date"], format="%b %d, %Y")
     return df.drop_duplicates(subset=["gamecode_num", "team"])
 
 
@@ -228,12 +230,12 @@ def team_recent_stats(all_games: pd.DataFrame, team: str,
 
 
 def team_form_sequence(all_games: pd.DataFrame, team: str,
-                       before_gameday: int, window: int = ROLLING_WINDOW) -> list[bool]:
-    """List of booleans, most recent first: True = win, False = loss."""
-    mask = (all_games["team"].str.upper() == team.upper()) & \
-           (all_games["gameday"] < before_gameday)
+                       window: int = ROLLING_WINDOW) -> list[bool]:
+    """List of booleans, most recent first: True = win, False = loss.
+    Sorted by actual game date so rescheduled matches are correctly placed."""
+    mask = all_games["team"].str.upper() == team.upper()
     sub = (all_games[mask]
-           .sort_values("gameday", ascending=False)
+           .sort_values("date", ascending=False)
            .head(window))
     return [bool(row.score > row.opp_score) for row in sub.itertuples()]
 
@@ -790,8 +792,8 @@ def main():
             a_season = a_row.to_dict()
             h_recent = team_recent_stats(all_games, home, int(rnd))
             a_recent = team_recent_stats(all_games, away, int(rnd))
-            h_form = team_form_sequence(all_games, home, int(rnd))
-            a_form = team_form_sequence(all_games, away, int(rnd))
+            h_form = team_form_sequence(all_games, home)
+            a_form = team_form_sequence(all_games, away)
 
             # Headers
             hcol, mcol, acol = st.columns([1, 2, 1])
