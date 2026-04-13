@@ -924,7 +924,7 @@ def main():
 
     st.divider()
     
-with st.expander("📖 How to read the stats"):
+    with st.expander("📖 How to read the stats"):
         st.markdown("""
     *Section 1* : **Efficiency Ratings**
                     
