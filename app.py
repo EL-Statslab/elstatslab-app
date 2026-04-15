@@ -18,6 +18,21 @@ import streamlit as st
 from matplotlib.gridspec import GridSpec
 from PIL import Image
 
+from streamlit.components.v1 import html
+
+def inject_ga():
+    html("""
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-0RCT1FNM8V"></script>
+        <script>
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'G-0RCT1FNM8V');
+        </script>
+    """, height=0)
+
+inject_ga()
+
 # =============================================================================
 # CONFIG
 # =============================================================================
