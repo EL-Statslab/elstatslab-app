@@ -18,6 +18,10 @@ import streamlit as st
 from matplotlib.gridspec import GridSpec
 from PIL import Image
 
+st.html("""
+<script defer src="https://cloud.umami.is/script.js" data-website-id="53afa855-245b-401a-865e-5a8b033e3bce"></script>
+""")
+
 # =============================================================================
 # CONFIG
 # =============================================================================
