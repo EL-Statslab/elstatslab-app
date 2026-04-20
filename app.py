@@ -149,6 +149,15 @@ def load_all_schedule(season: int) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=600)
+def load_official_standings() -> pd.DataFrame | None:
+    """Load official standings from the API-fed table if available."""
+    try:
+        return pd.read_sql("SELECT * FROM standings_official", get_conn())
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=600)
 def load_matchday(season: int, gameday: int) -> pd.DataFrame:
     q = """
         SELECT gamecode, date, startime, round AS phase,
@@ -241,7 +250,8 @@ def aggregate_stats(df: pd.DataFrame) -> dict:
     }
 
 
-def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int) -> pd.DataFrame:
+def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int,
+                      official_standings: pd.DataFrame | None = None) -> pd.DataFrame:
     scoped = all_games[all_games["gameday"] <= up_to_gameday]
     rows = []
     for team, g in scoped.groupby("team"):
@@ -254,7 +264,22 @@ def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int) -> pd.DataFra
     df = pd.DataFrame(rows).sort_values(["wins", "pt_diff"],
                                         ascending=[False, False])
     df["rank"] = range(1, len(df) + 1)
-    return df.reset_index(drop=True)
+    df = df.reset_index(drop=True)
+
+    # Override rank + last_5_form with official standings when available
+    if official_standings is not None and not official_standings.empty:
+        for i, row in df.iterrows():
+            match = official_standings[
+                official_standings["team_code"].str.upper() == row["team_code"].upper()
+            ]
+            if not match.empty:
+                df.at[i, "rank"] = int(match.iloc[0]["rank"])
+                if "last_5_form" in match.columns:
+                    df.at[i, "last_5_form"] = match.iloc[0]["last_5_form"]
+        # Re-sort by official rank
+        df = df.sort_values("rank").reset_index(drop=True)
+
+    return df
 
 
 def team_recent_stats(all_games: pd.DataFrame, team: str,
@@ -431,12 +456,12 @@ def render_comparison_styled(label: str, home: str, away: str,
         "font-family:sans-serif;font-size:0.9rem;'>"
         "<thead><tr>"
         f"<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
-        f"font-weight:600;width:30%;border-bottom:2px solid #ddd;white-space:nowrap;"
+        f"font-weight:600;width:27%;border-bottom:2px solid #ddd;white-space:nowrap;"
         f"overflow:hidden;text-overflow:ellipsis;'>{home}</th>"
         "<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
-        "font-weight:600;width:18%;border-bottom:2px solid #ddd;'>Metric</th>"
+        "font-weight:600;width:22%;border-bottom:2px solid #ddd;'>Metric</th>"
         f"<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
-        f"font-weight:600;width:30%;border-bottom:2px solid #ddd;white-space:nowrap;"
+        f"font-weight:600;width:27%;border-bottom:2px solid #ddd;white-space:nowrap;"
         f"overflow:hidden;text-overflow:ellipsis;'>{away}</th>"
         "<th style='padding:8px 4px;text-align:center;color:#666;font-size:0.8rem;"
         "font-weight:600;width:22%;border-bottom:2px solid #ddd;'>Δ</th>"
@@ -773,7 +798,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
 # =============================================================================
 def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                           phase: str, round_label_long: str,
-                          card_index: int):
+                          card_index: int,
+                          official_standings: pd.DataFrame | None = None):
     home, away = g["hometeam"], g["awayteam"]
     hcode, acode = g["homecode"], g["awaycode"]
     home_disp = display_name(hcode, home)
@@ -782,7 +808,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     is_postseason = phase in ("PI", "PO", "FF")
 
     up_to = int(rnd) if played else int(rnd) - 1
-    standings_scope = team_season_stats(all_games, up_to)
+    standings_scope = team_season_stats(all_games, up_to, official_standings)
 
     if standings_scope.empty:
         st.info("No season data available yet.")
@@ -1075,6 +1101,7 @@ def main():
         return
 
     all_games = load_team_games(int(season))
+    official_standings = load_official_standings()
 
     # Phase banner
     phase = games["phase"].iloc[0] if "phase" in games.columns else "RS"
@@ -1157,6 +1184,7 @@ def main():
                 render_match_analysis(
                     g, int(rnd), all_games, phase, round_label_long,
                     card_index=idx,
+                    official_standings=official_standings,
                 )
 
     st.divider()
