@@ -6,6 +6,9 @@ schedule and team_stats rows for CURRENT_SEASON, and writes them to
 euroleague_public.db. This file is what gets pushed to GitHub for the
 public Streamlit deployment.
 
+Also fetches official standings from the EuroLeague API and stores them
+in a standings_official table (rank, home/away record, last5Form, etc.)
+
 Run this script every time you update euroleague.db with new round data:
     python build_public_db.py
 
@@ -14,8 +17,10 @@ The output euroleague_public.db will be much smaller (a few MB instead of
 """
 
 import sqlite3
-import shutil
 from pathlib import Path
+
+import pandas as pd
+from euroleague_api.standings import Standings
 
 # =============================================================================
 # CONFIG
@@ -44,10 +49,12 @@ def main():
     dst = sqlite3.connect(OUTPUT_DB)
 
     try:
+        # =====================================================================
+        # STEP 1 : Copy schedule and team_stats (current season only)
+        # =====================================================================
         for table in TABLES_TO_COPY:
             print(f"\n📋 Copying table: {table}")
 
-            # Get the CREATE TABLE statement from the source
             cur = src.cursor()
             cur.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
@@ -59,12 +66,9 @@ def main():
                 continue
             create_sql = row[0]
 
-            # Create the table in destination
             dst.execute(create_sql)
 
-            # Copy rows for CURRENT_SEASON
-            # Use a parameterised query so the column name varies per table
-            season_col = "Season"  # both tables use this column name
+            season_col = "Season"
             select_sql = f'SELECT * FROM "{table}" WHERE {season_col} = ?'
             rows = src.execute(select_sql, (CURRENT_SEASON,)).fetchall()
             n = len(rows)
@@ -73,19 +77,87 @@ def main():
                 print(f"   ⚠️  No rows for season {CURRENT_SEASON}")
                 continue
 
-            # Get column count to build the INSERT statement
             placeholders = ",".join(["?"] * len(rows[0]))
             insert_sql = f'INSERT INTO "{table}" VALUES ({placeholders})'
             dst.executemany(insert_sql, rows)
             dst.commit()
             print(f"   ✅ Copied {n} rows")
 
-        # Vacuum to reduce file size
+        # =====================================================================
+        # STEP 2 : Fetch official standings from EuroLeague API
+        # =====================================================================
+        print("\n📡 Fetching official standings from EuroLeague API...")
+
+        # Find the last fully played round
+        last_round = pd.read_sql(
+            """
+            SELECT MAX(gameday) as r
+            FROM schedule
+            WHERE Season = ? AND played = 'true'
+            """,
+            dst,
+            params=(CURRENT_SEASON,),
+        ).iloc[0]["r"]
+
+        if last_round is None:
+            print("   ⚠️  No played rounds found, skipping standings fetch")
+        else:
+            print(f"   Last played round: {int(last_round)}")
+            s = Standings()
+            df = s.get_standings(season=CURRENT_SEASON, round_number=int(last_round))
+
+            # Keep only the useful columns
+            cols_to_keep = [
+                "position", "club.code", "club.name", "club.editorialName",
+                "gamesPlayed", "gamesWon", "gamesLost", "winPercentage",
+                "pointsDifference", "pointsFor", "pointsAgainst",
+                "homeRecord", "awayRecord", "lastTenRecord", "last5Form",
+                "qualified",
+            ]
+            # Only keep columns that actually exist in the response
+            cols_to_keep = [c for c in cols_to_keep if c in df.columns]
+            df = df[cols_to_keep].copy()
+
+            # Rename to clean snake_case
+            rename_map = {
+                "position":          "rank",
+                "club.code":         "team_code",
+                "club.name":         "team_name",
+                "club.editorialName":"team_short",
+                "gamesPlayed":       "games",
+                "gamesWon":          "wins",
+                "gamesLost":         "losses",
+                "winPercentage":     "win_pct",
+                "pointsDifference":  "pt_diff",
+                "pointsFor":         "pf",
+                "pointsAgainst":     "pa",
+                "homeRecord":        "home_record",
+                "awayRecord":        "away_record",
+                "lastTenRecord":     "last_10",
+                "last5Form":         "last_5_form",
+                "qualified":         "qualified",
+            }
+            df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+            # SQLite cannot store Python lists: serialize any list/dict columns to JSON strings
+            import json
+            for col in df.columns:
+                if df[col].apply(lambda x: isinstance(x, (list, dict))).any():
+                    df[col] = df[col].apply(
+                        lambda x: json.dumps(x) if isinstance(x, (list, dict)) else x
+                    )
+
+            df.to_sql("standings_official", dst, if_exists="replace", index=False)
+            dst.commit()
+            print(f"   ✅ Stored {len(df)} teams in standings_official")
+
+        # =====================================================================
+        # STEP 3 : Vacuum
+        # =====================================================================
         print("\n🧹 Vacuuming database to optimise size...")
         dst.execute("VACUUM")
         dst.commit()
 
-        # Final size
         size_mb = OUTPUT_DB.stat().st_size / (1024 * 1024)
         print(f"\n✨ Done! {OUTPUT_DB} is {size_mb:.2f} MB")
         print(f"   GitHub limit is 100 MB, you're well within bounds.")
