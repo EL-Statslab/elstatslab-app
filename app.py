@@ -925,7 +925,7 @@ def main():
     with st.sidebar:
         st.header("Filters")
         seasons = load_seasons()
-        season = st.selectbox("Season", seasons, index=0)
+        season = st.selectbox("Season", seasons, index=0, key="season_select")
 
     schedule_all = load_all_schedule(int(season))
     if schedule_all.empty:
@@ -1003,6 +1003,7 @@ def main():
         index=default_index,
         horizontal=True,
         label_visibility="collapsed",
+        key="main_round_radio",
     )
     rnd = label_to_round[selected_label]
 
@@ -1040,6 +1041,7 @@ def main():
                         options=rs_options,
                         index=idx,
                         label_visibility="collapsed",
+                        key="rs_round_active",
                     )
                     new_rnd = int(chosen.replace("Round ", ""))
                     if new_rnd != current_rs:
@@ -1056,6 +1058,7 @@ def main():
                     options=rs_options,
                     index=0,
                     label_visibility="collapsed",
+                    key="rs_round_entry",
                 )
                 if chosen != rs_options[0]:
                     st.session_state["browse_rs_round"] = int(
@@ -1215,10 +1218,6 @@ The right-hand table switches automatically: for upcoming games it shows each te
         )
 
     st.caption("DataViz by @EL_Statslab")
-
-
-if __name__ == "__main__":
-    main()
 
 
 if __name__ == "__main__":
