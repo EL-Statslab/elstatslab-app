@@ -7,6 +7,7 @@ Run locally:
     streamlit run app.py
 """
 
+import base64
 import io
 import math
 import sqlite3
@@ -18,18 +19,21 @@ import streamlit as st
 from matplotlib.gridspec import GridSpec
 from PIL import Image
 
-st.html("""
-<script defer src="https://cloud.umami.is/script.js" data-website-id="53afa855-245b-401a-865e-5a8b033e3bce"></script>
-""")
-
 # =============================================================================
 # CONFIG
 # =============================================================================
-# Use the public DB if available (Streamlit Cloud deployment),
-# otherwise fall back to the local full archive (developer mode)
-_PUBLIC_DB = Path("euroleague_public.db")
+# On Streamlit Cloud, euroleague_public.db sits next to app.py (relative path).
+# In local developer mode, both DBs live in the parent Euroleague_Stats folder.
+_PUBLIC_DB_LOCAL = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague_public.db")
+_PUBLIC_DB_CLOUD = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
-DB_PATH = _PUBLIC_DB if _PUBLIC_DB.exists() else _LOCAL_DB
+
+if _PUBLIC_DB_LOCAL.exists():
+    DB_PATH = _PUBLIC_DB_LOCAL
+elif _PUBLIC_DB_CLOUD.exists():
+    DB_PATH = _PUBLIC_DB_CLOUD
+else:
+    DB_PATH = _LOCAL_DB
 LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
@@ -40,6 +44,7 @@ st.set_page_config(
     page_title="ELSTATSLAB Match Center",
     page_icon=str(ELSTATSLAB_LOGO) if ELSTATSLAB_LOGO.exists() else "🏀",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # =============================================================================
@@ -53,15 +58,12 @@ LOGO_MAP = {
     "TEL": "MTA.png", "ULK": "FEN.png", "VIR": "VIR.png", "ZAL": "ZAL.png",
 }
 
-# Per logo zoom corrections so all logos appear visually balanced in PNG export.
-# Key is the team logo file stem (without .png).
 ZOOM_CORRECTIONS = {
     "ASM": 1.3, "AXM": 1.5, "CZV": 1.6, "EFS": 0.8,
     "FEN": 1.7, "BAR": 0.8, "PAO": 1.1, "VIR": 0.85,
     "PBB": 0.85, "OLY": 0.9, "HTA": 0.8,
 }
 
-# Clean display names per schedule code (sponsors removed for readability)
 TEAM_DISPLAY_NAMES = {
     "ASV": "LDLC ASVEL Villeurbanne",
     "BAR": "FC Barcelona",
@@ -87,12 +89,10 @@ TEAM_DISPLAY_NAMES = {
 
 
 def display_name(code: str, fallback: str) -> str:
-    """Return clean display name for a team code, fallback to title-cased raw."""
     return TEAM_DISPLAY_NAMES.get(code, fallback.title())
 
 
 def logo_zoom(code: str) -> float:
-    """Returns the zoom multiplier for a given schedule code."""
     filename = LOGO_MAP.get(code, "")
     stem = Path(filename).stem
     return ZOOM_CORRECTIONS.get(stem, 1.0)
@@ -106,6 +106,16 @@ def logo_path(code: str) -> Path | None:
     return p if p.exists() else None
 
 
+@st.cache_data(ttl=3600)
+def logo_b64(code: str) -> str | None:
+    """Return base64 encoded logo for inlining in HTML cards."""
+    lp = logo_path(code)
+    if not lp:
+        return None
+    with open(lp, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
 # =============================================================================
 # DATA ACCESS
 # =============================================================================
@@ -117,7 +127,6 @@ def get_conn():
 
 @st.cache_data(ttl=600)
 def load_seasons() -> list[int]:
-    # Public release: current season only
     return [CURRENT_SEASON]
 
 
@@ -125,6 +134,18 @@ def load_seasons() -> list[int]:
 def load_rounds(season: int) -> list[int]:
     q = "SELECT DISTINCT gameday FROM schedule WHERE Season = ? ORDER BY gameday"
     return pd.read_sql(q, get_conn(), params=(season,))["gameday"].tolist()
+
+
+@st.cache_data(ttl=600)
+def load_all_schedule(season: int) -> pd.DataFrame:
+    """Load every scheduled game of the season once, for phase detection."""
+    q = """
+        SELECT gameday, round AS phase
+        FROM schedule
+        WHERE Season = ?
+        ORDER BY gameday
+    """
+    return pd.read_sql(q, get_conn(), params=(season,))
 
 
 @st.cache_data(ttl=600)
@@ -246,8 +267,6 @@ def team_recent_stats(all_games: pd.DataFrame, team: str,
 
 def team_form_sequence(all_games: pd.DataFrame, team: str,
                        window: int = ROLLING_WINDOW) -> list[bool]:
-    """List of booleans, most recent first: True = win, False = loss.
-    Sorted by actual game date so rescheduled matches are correctly placed."""
     mask = all_games["team"].str.upper() == team.upper()
     sub = (all_games[mask]
            .sort_values("date", ascending=False)
@@ -257,11 +276,58 @@ def team_form_sequence(all_games: pd.DataFrame, team: str,
 
 def team_single_game_stats(all_games: pd.DataFrame, team: str,
                            gameday: int) -> dict:
-    """Stats for one specific match (used in 'This Game' tab for played matches)."""
     mask = (all_games["team"].str.upper() == team.upper()) & \
            (all_games["gameday"] == gameday)
     sub = all_games[mask]
     return aggregate_stats(sub)
+
+
+# =============================================================================
+# ROUND LABELS (Play-In / Playoffs Game 1..N / Final Four / Regular Season)
+# =============================================================================
+PHASE_LABELS = {
+    "RS": "Regular Season",
+    "PI": "Play-In",
+    "PO": "Playoffs",
+    "FF": "Final Four",
+}
+
+
+def build_round_labels(schedule_df: pd.DataFrame) -> dict[int, tuple[str, str]]:
+    """
+    Build a mapping gameday -> (short_label, long_label) for each round,
+    where Playoffs rounds are numbered Game 1, Game 2...
+
+    Returns e.g. {
+        39: ("Play-In", "Play-In"),
+        40: ("Playoffs Game 1", "Playoffs Game 1"),
+        41: ("Playoffs Game 2", "Playoffs Game 2"),
+        ...
+    }
+    """
+    labels: dict[int, tuple[str, str]] = {}
+    po_counter = 0
+    ff_counter = 0
+    # Take first phase per gameday (all games of a gameday share the phase)
+    by_day = schedule_df.drop_duplicates("gameday").sort_values("gameday")
+    for _, row in by_day.iterrows():
+        gd = int(row["gameday"])
+        ph = row["phase"]
+        if ph == "PO":
+            po_counter += 1
+            short = f"Playoffs Game {po_counter}"
+            labels[gd] = (short, short)
+        elif ph == "PI":
+            labels[gd] = ("Play-In", "Play-In")
+        elif ph == "FF":
+            ff_counter += 1
+            if ff_counter == 1:
+                labels[gd] = ("Semifinals", "Final Four Semifinals")
+            else:
+                labels[gd] = ("Final", "Final Four Final")
+        else:
+            labels[gd] = (f"Round {gd}", f"Regular Season Round {gd}")
+    return labels
 
 
 # =============================================================================
@@ -305,28 +371,15 @@ def predict_home_win_pct(standings: pd.DataFrame,
 # =============================================================================
 METRICS = ["ORTG", "DRTG", "NETRTG", "OREB%", "REB%", "AST%", "eFG%", "TOV%"]
 
-# Reference scales (one standard deviation of the metric at team level in EL)
-# These normalize the gap to decide colour intensity.
 METRIC_SCALE = {
-    "ORTG":   8.0,
-    "DRTG":   8.0,
-    "NETRTG": 10.0,
-    "OREB%":  5.0,
-    "REB%":   4.0,
-    "AST%":   6.0,
-    "eFG%":   4.0,
-    "TOV%":   2.5,
+    "ORTG":   8.0, "DRTG":   8.0, "NETRTG": 10.0,
+    "OREB%":  5.0, "REB%":   4.0, "AST%":   6.0,
+    "eFG%":   4.0, "TOV%":   2.5,
 }
-
-# For DRTG lower is better. For everything else higher is better.
 LOWER_IS_BETTER = {"DRTG", "TOV%"}
 
 
 def colour_intensity(hv, av, metric: str) -> tuple[float, float]:
-    """
-    Returns (home_intensity, away_intensity) in [-1, 1].
-    Positive = this team is better (gets green), negative = worse (gets red).
-    """
     if hv is None or av is None:
         return (0.0, 0.0)
     diff = hv - av
@@ -337,29 +390,8 @@ def colour_intensity(hv, av, metric: str) -> tuple[float, float]:
     return (norm, -norm)
 
 
-def gradient_colour(intensity: float) -> str:
-    """
-    Map intensity in [-1, 1] to an rgba colour string for CSS.
-    Positive => green, negative => red, zero => transparent.
-    """
-    if intensity >= 0:
-        # Green
-        alpha = min(0.55, intensity * 0.6)
-        return f"background-color: rgba(46, 160, 67, {alpha:.3f});"
-    else:
-        # Red
-        alpha = min(0.55, -intensity * 0.6)
-        return f"background-color: rgba(218, 54, 51, {alpha:.3f});"
-
-
 def render_comparison_styled(label: str, home: str, away: str,
                               h_stats: dict, a_stats: dict):
-    """
-    Render a stat comparison table as pure HTML so it:
-    - Stays fixed (no draggable columns like st.dataframe)
-    - Adapts naturally to mobile via CSS
-    - Keeps the gradient colour coding
-    """
     st.markdown(f"**{label}**")
     if not h_stats or not a_stats:
         st.info("Not enough games yet for this scope.")
@@ -385,7 +417,7 @@ def render_comparison_styled(label: str, home: str, away: str,
             f"<td style='background:{bg(h_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{hv_s}</td>"
             f"<td style='background:#f5f5f5;padding:8px 6px;text-align:center;"
-            f"color:#555;border-bottom:1px solid #eee;white-space:nowrap;'>{m}</td>"
+            f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
             f"<td style='background:{bg(a_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{av_s}</td>"
             f"<td style='padding:8px 6px;text-align:center;color:#888;"
@@ -416,28 +448,14 @@ def render_comparison_styled(label: str, home: str, away: str,
     st.markdown(table_html, unsafe_allow_html=True)
 
 
-def render_team_header(code: str, display_name: str,
+def render_team_header(code: str, disp_name: str,
                        standings_row: dict | None,
                        form_seq: list[bool]):
-    """Render a team header block with strict vertical alignment.
-
-    Strategy: build a single HTML block where:
-    - Logo lives in a fixed height container, centered vertically and horizontally
-    - The logo image gets max-height/max-width so any aspect ratio fits
-    - Name has fixed min-height (covers 1 or 2 line names)
-    - Standings and sparkline have fixed heights
-    Result: every block has the same total height regardless of logo shape.
-    """
-    import base64
-
     lp = logo_path(code)
     logo_html = ""
     if lp:
-        # Embed the image as base64 so we can fully control sizing via CSS
-        with open(lp, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
+        b64 = logo_b64(code)
         zoom = logo_zoom(code)
-        # Base max dimensions inside the 130px container
         max_h = int(110 * zoom)
         max_w = int(130 * zoom)
         max_h = max(70, min(max_h, 130))
@@ -448,16 +466,14 @@ def render_team_header(code: str, display_name: str,
             f"object-fit:contain;'/>"
         )
 
-    # Standings text
     if standings_row:
         rk = standings_row.get("rank", "?")
         w = int(standings_row.get("wins", 0))
         l = int(standings_row.get("losses", 0))
-        standings_text = f"{w}W {l}L"
+        standings_text = f"#{rk} · {w}W {l}L"
     else:
         standings_text = ""
 
-    # Sparkline squares
     squares = ""
     if form_seq:
         for win in reversed(form_seq):
@@ -467,7 +483,6 @@ def render_team_header(code: str, display_name: str,
                 f"background:{colour};margin-right:3px;border-radius:2px;'></span>"
             )
 
-    # Single HTML block with strict layout (no indentation to avoid markdown code block)
     html = (
         "<div style='display:flex;flex-direction:column;align-items:center;"
         "font-family:sans-serif;'>"
@@ -475,7 +490,7 @@ def render_team_header(code: str, display_name: str,
         f"justify-content:center;width:100%;'>{logo_html}</div>"
         "<div style='font-weight:bold;font-size:1rem;text-align:center;"
         "min-height:48px;line-height:1.2;margin-top:8px;display:flex;"
-        f"align-items:center;justify-content:center;'>{display_name}</div>"
+        f"align-items:center;justify-content:center;'>{disp_name}</div>"
         "<div style='color:#888;font-size:0.85rem;height:22px;"
         f"text-align:center;margin-top:4px;'>{standings_text}</div>"
         "<div style='height:20px;text-align:center;margin-top:4px;'>"
@@ -485,8 +500,80 @@ def render_team_header(code: str, display_name: str,
     st.markdown(html, unsafe_allow_html=True)
 
 
+def render_match_card(hcode: str, acode: str,
+                      home_disp: str, away_disp: str,
+                      score_text: str | None,
+                      status_text: str,
+                      status_colour: str,
+                      game_date: str | None):
+    """Render a compact visual match card with both logos, names and status."""
+    h_b64 = logo_b64(hcode)
+    a_b64 = logo_b64(acode)
+    h_zoom = logo_zoom(hcode)
+    a_zoom = logo_zoom(acode)
+
+    h_logo = (
+        f"<img src='data:image/png;base64,{h_b64}' "
+        f"style='max-height:{int(60 * h_zoom)}px;max-width:{int(70 * h_zoom)}px;"
+        f"object-fit:contain;'/>"
+        if h_b64 else ""
+    )
+    a_logo = (
+        f"<img src='data:image/png;base64,{a_b64}' "
+        f"style='max-height:{int(60 * a_zoom)}px;max-width:{int(70 * a_zoom)}px;"
+        f"object-fit:contain;'/>"
+        if a_b64 else ""
+    )
+
+    middle = (
+        f"<div style='font-size:1.5rem;font-weight:bold;color:#1a1a1a;"
+        f"letter-spacing:1px;'>{score_text}</div>"
+        if score_text
+        else "<div style='font-size:1.2rem;font-weight:bold;color:#666;'>VS</div>"
+    )
+
+    date_html = (
+        f"<div style='font-size:0.75rem;color:#999;margin-top:2px;'>{game_date}</div>"
+        if game_date else ""
+    )
+
+    html = (
+        "<div style='display:flex;align-items:center;justify-content:space-between;"
+        "padding:4px 0 12px 0;gap:12px;'>"
+        # Home block
+        "<div style='flex:1;display:flex;flex-direction:column;align-items:center;"
+        "min-width:0;'>"
+        f"<div style='height:72px;display:flex;align-items:center;justify-content:center;'>"
+        f"{h_logo}</div>"
+        f"<div style='font-weight:600;font-size:0.9rem;text-align:center;"
+        f"margin-top:6px;color:#1a1a1a;line-height:1.2;min-height:36px;"
+        f"display:flex;align-items:center;'>{home_disp}</div>"
+        "</div>"
+        # Middle block
+        "<div style='display:flex;flex-direction:column;align-items:center;"
+        "min-width:80px;'>"
+        f"{middle}"
+        f"<div style='font-size:0.75rem;color:{status_colour};margin-top:6px;"
+        f"font-weight:600;text-transform:uppercase;letter-spacing:0.5px;'>"
+        f"{status_text}</div>"
+        f"{date_html}"
+        "</div>"
+        # Away block
+        "<div style='flex:1;display:flex;flex-direction:column;align-items:center;"
+        "min-width:0;'>"
+        f"<div style='height:72px;display:flex;align-items:center;justify-content:center;'>"
+        f"{a_logo}</div>"
+        f"<div style='font-weight:600;font-size:0.9rem;text-align:center;"
+        f"margin-top:6px;color:#1a1a1a;line-height:1.2;min-height:36px;"
+        f"display:flex;align-items:center;'>{away_disp}</div>"
+        "</div>"
+        "</div>"
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 # =============================================================================
-# PNG EXPORT (matplotlib)
+# PNG EXPORT (matplotlib) -- unchanged
 # =============================================================================
 EL_GREEN = "#2ea043"
 EL_RED   = "#da3633"
@@ -494,7 +581,6 @@ BG_WHITE = "#ffffff"
 
 
 def mpl_colour(intensity: float) -> tuple[float, float, float, float]:
-    """Same gradient logic but returns an rgba tuple for matplotlib."""
     if intensity >= 0:
         alpha = min(0.55, intensity * 0.6)
         return (46/255, 160/255, 67/255, alpha)
@@ -512,11 +598,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       round_label: str,
                       show_prediction: bool = True,
                       right_label: str = "Last 5") -> bytes:
-    """
-    Build a square 1200x1200 PNG with logos, standings, form, both stat tables
-    (Season + Last 5) with gradient colouring, and win probabilities.
-    Returns the PNG bytes.
-    """
     fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
     gs = GridSpec(
         nrows=5, ncols=2,
@@ -525,17 +606,14 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         left=0.05, right=0.95, top=0.95, bottom=0.03,
     )
 
-    # --- Title bar with branding (ELSTATSLAB left, EuroLeague right) ---
     ax_title = fig.add_subplot(gs[0, :])
     ax_title.axis("off")
     ax_title.set_xlim(0, 1)
     ax_title.set_ylim(0, 1)
-    # ELSTATSLAB logo top left (square aspect, can use a tall box)
     if ELSTATSLAB_LOGO.exists():
         brand_ax = ax_title.inset_axes([0.0, -0.4, 0.16, 1.8])
         brand_ax.imshow(plt.imread(str(ELSTATSLAB_LOGO)), interpolation="lanczos")
         brand_ax.axis("off")
-    # EuroLeague logo top right: horizontal logo, wide short box
     if EUROLEAGUE_LOGO.exists():
         el_ax = ax_title.inset_axes([0.74, -0.15, 0.34, 1.3])
         el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
@@ -543,24 +621,19 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_title.text(0.5, 0.5, f"EuroLeague {round_label}",
                   ha="center", va="center", fontsize=22, fontweight="bold")
 
-    # --- Team headers row ---
     ax_head = fig.add_subplot(gs[1, :])
     ax_head.axis("off")
     ax_head.set_xlim(0, 1)
     ax_head.set_ylim(0, 1)
 
-    def draw_team_block(code: str, name: str, rank: int, wl: str,
-                        form: list[bool], x_center: float):
-        """Draws logo + name + standings + sparkline stacked at x_center."""
-        # Logo: base box [width=0.18, height=0.55] then apply zoom
+    def draw_team_block(code, name, rank, wl, form, x_center):
         base_w, base_h = 0.18, 0.55
         zoom = logo_zoom(code)
         w = base_w * zoom
         h = base_h * zoom
-        # Cap so very large logos do not overflow
         w = min(w, 0.28)
         h = min(h, 0.85)
-        logo_y = 0.55  # bottom of logo box
+        logo_y = 0.55
         lp = logo_path(code)
         if lp:
             logo_ax = ax_head.inset_axes(
@@ -568,14 +641,10 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             )
             logo_ax.imshow(plt.imread(str(lp)))
             logo_ax.axis("off")
-
-        # Team name
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
-        # Rank + W-L
-        ax_head.text(x_center, 0.20, f"{wl}",
+        ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
                      ha="center", va="top", fontsize=11, color="#555555")
-        # Sparkline below standings, centered on x_center
         if form:
             n = len(form)
             sq = 0.022
@@ -596,19 +665,15 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     draw_team_block(home_code, home_name, home_rank, home_wl, home_form, 0.17)
     draw_team_block(away_code, away_name, away_rank, away_wl, away_form, 0.83)
 
-    # Big VS centered
     ax_head.text(0.5, 0.55, "VS", ha="center", va="center",
                  fontsize=34, fontweight="bold")
 
-    # --- Stats tables (Season left, Last 5 right) ---
-    def draw_table(ax, title: str, h_stats: dict, a_stats: dict,
-                   home_name: str, away_name: str):
+    def draw_table(ax, title, h_stats, a_stats, home_name, away_name):
         ax.axis("off")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.97, title, ha="center", va="top",
                 fontsize=14, fontweight="bold")
-
         col_x = {"home": 0.22, "metric": 0.5, "away": 0.78}
         header_y = 0.88
         ax.text(col_x["home"],   header_y, home_name,
@@ -619,7 +684,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         ax.text(col_x["away"],   header_y, away_name,
                 ha="center", va="center", fontsize=10,
                 color="#444444", fontweight="bold")
-
         row_h = 0.105
         top_y = 0.78
         for i, m in enumerate(METRICS):
@@ -627,8 +691,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             hv = h_stats.get(m)
             av = a_stats.get(m)
             h_int, a_int = colour_intensity(hv, av, m)
-
-            # Cell backgrounds
             cell_w = 0.22
             cell_h = row_h * 0.85
             for side, intensity, cx in [
@@ -643,8 +705,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                     linewidth=0.5,
                 )
                 ax.add_patch(rect)
-
-            # Metric label background (neutral)
             rect_m = plt.Rectangle(
                 (col_x["metric"] - 0.1, y - cell_h / 2),
                 0.2, cell_h,
@@ -653,8 +713,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                 linewidth=0.5,
             )
             ax.add_patch(rect_m)
-
-            # Values
             hv_s = f"{hv:.1f}" if hv is not None else "-"
             av_s = f"{av:.1f}" if av is not None else "-"
             ax.text(col_x["home"], y, hv_s, ha="center", va="center",
@@ -670,7 +728,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_right = fig.add_subplot(gs[2, 1])
     draw_table(ax_right, right_label, h_right, a_right, home_name, away_name)
 
-    # --- Win probability bar ---
     ax_prob = fig.add_subplot(gs[3, :])
     ax_prob.axis("off")
     ax_prob.set_xlim(0, 1)
@@ -681,11 +738,9 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                      ha="center", va="center", fontsize=13, fontweight="bold")
         bar_y = 0.35
         bar_h = 0.3
-        # Home (green) portion
         ax_prob.add_patch(plt.Rectangle(
             (0.1, bar_y), 0.8 * home_prob, bar_h,
             facecolor=EL_GREEN, edgecolor="none"))
-        # Away (red) portion
         ax_prob.add_patch(plt.Rectangle(
             (0.1 + 0.8 * home_prob, bar_y), 0.8 * away_prob, bar_h,
             facecolor=EL_RED, edgecolor="none"))
@@ -698,12 +753,10 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                      ha="center", va="center", fontsize=12,
                      color="#888888", style="italic")
 
-    # --- Footer ---
     ax_foot = fig.add_subplot(gs[4, :])
     ax_foot.axis("off")
     ax_foot.set_xlim(0, 1)
     ax_foot.set_ylim(0, 1)
-    # X logo as text (the brand uses a stylized 𝕏)
     ax_foot.text(0.5, 0.5, "DataViz by  𝕏 @EL_Statslab",
                  ha="center", va="center", fontsize=11,
                  color="#888888", style="italic")
@@ -716,10 +769,150 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
 
 
 # =============================================================================
+# MATCH ANALYSIS RENDERER (extracted so we can call it from the card)
+# =============================================================================
+def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
+                          phase: str, round_label_long: str,
+                          card_index: int):
+    home, away = g["hometeam"], g["awayteam"]
+    hcode, acode = g["homecode"], g["awaycode"]
+    home_disp = display_name(hcode, home)
+    away_disp = display_name(acode, away)
+    played = g["played"] == "true"
+    is_postseason = phase in ("PI", "PO", "FF")
+
+    up_to = int(rnd) if played else int(rnd) - 1
+    standings_scope = team_season_stats(all_games, up_to)
+
+    if standings_scope.empty:
+        st.info("No season data available yet.")
+        return
+
+    try:
+        h_row = standings_scope.loc[
+            standings_scope["team"].str.upper() == home.upper()
+        ].iloc[0]
+        a_row = standings_scope.loc[
+            standings_scope["team"].str.upper() == away.upper()
+        ].iloc[0]
+    except IndexError:
+        st.warning("One of the teams has no prior games in this season scope.")
+        return
+
+    h_season = h_row.to_dict()
+    a_season = a_row.to_dict()
+    h_recent = team_recent_stats(all_games, home, int(rnd))
+    a_recent = team_recent_stats(all_games, away, int(rnd))
+    h_form = team_form_sequence(all_games, home)
+    a_form = team_form_sequence(all_games, away)
+
+    hcol, mcol, acol = st.columns([1, 2, 1])
+    with hcol:
+        render_team_header(hcode, home_disp, h_season, h_form)
+    with mcol:
+        st.markdown(
+            "<div style='text-align:center; padding-top:40px;"
+            "font-size:24px; font-weight:bold;'>VS</div>",
+            unsafe_allow_html=True,
+        )
+    with acol:
+        render_team_header(acode, away_disp, a_season, a_form)
+
+    st.divider()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        render_comparison_styled("Season", home_disp, away_disp,
+                                 h_season, a_season)
+    with col2:
+        if played:
+            h_game = team_single_game_stats(all_games, home, int(rnd))
+            a_game = team_single_game_stats(all_games, away, int(rnd))
+            render_comparison_styled("This Game",
+                                     home_disp, away_disp,
+                                     h_game, a_game)
+        else:
+            render_comparison_styled(f"Last {ROLLING_WINDOW}",
+                                     home_disp, away_disp,
+                                     h_recent, a_recent)
+
+    pred = predict_home_win_pct(standings_scope, home, away,
+                                h_recent, a_recent)
+    st.markdown("**Win probability**")
+    if is_postseason:
+        st.markdown(
+            "<div style='text-align:center; padding:14px; "
+            "background:#f5f5f5; border-radius:6px; color:#666; "
+            "font-style:italic;'>"
+            "Predictions disabled for playoffs"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        pcol1, pcol2 = st.columns(2)
+        pcol1.metric(f"{home_disp} (Home)", f"{pred['home_prob']*100:.1f}%")
+        pcol2.metric(f"{away_disp} (Away)", f"{pred['away_prob']*100:.1f}%")
+
+        with st.popover("How is this calculated?"):
+            st.markdown(
+                "The win probability blends several signals: each team's "
+                "season long efficiency profile, their recent form, the "
+                "current standings, and the home court factor. Each element "
+                "contributes to a weighted estimate, calibrated from "
+                "historical EuroLeague results."
+            )
+
+    st.divider()
+
+    png_key = f"png_{card_index}_{rnd}_{hcode}_{acode}"
+    if png_key not in st.session_state:
+        if st.button("📥 Generate downloadable image",
+                     key=f"btn_{card_index}_{rnd}_{hcode}_{acode}"):
+            with st.spinner("Generating image..."):
+                if played:
+                    h_right_data = team_single_game_stats(all_games, home, int(rnd))
+                    a_right_data = team_single_game_stats(all_games, away, int(rnd))
+                    right_lbl = "This Game"
+                else:
+                    h_right_data = h_recent
+                    a_right_data = a_recent
+                    right_lbl = f"Last {ROLLING_WINDOW}"
+                st.session_state[png_key] = build_preview_png(
+                    home_code=hcode, home_name=home_disp,
+                    home_rank=int(h_season["rank"]),
+                    home_wl=f"{int(h_season['wins'])}W "
+                            f"{int(h_season['losses'])}L",
+                    home_form=h_form,
+                    away_code=acode, away_name=away_disp,
+                    away_rank=int(a_season["rank"]),
+                    away_wl=f"{int(a_season['wins'])}W "
+                            f"{int(a_season['losses'])}L",
+                    away_form=a_form,
+                    h_season=h_season, a_season=a_season,
+                    h_right=h_right_data, a_right=a_right_data,
+                    home_prob=pred["home_prob"],
+                    away_prob=pred["away_prob"],
+                    round_label=round_label_long,
+                    show_prediction=not is_postseason,
+                    right_label=right_lbl,
+                )
+            st.rerun()
+
+    if png_key in st.session_state:
+        st.download_button(
+            label="📥 Download",
+            data=st.session_state[png_key],
+            file_name=f"R{rnd}_{hcode}_vs_{acode}.png",
+            mime="image/png",
+            key=f"dl_{card_index}_{rnd}_{hcode}_{acode}",
+        )
+
+
+# =============================================================================
 # APP
 # =============================================================================
 def main():
-    # Title row with logo
+    # Top branding row
     title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
     with title_col1:
         if ELSTATSLAB_LOGO.exists():
@@ -728,16 +921,151 @@ def main():
         st.title("ELSTATSLAB Match Center")
         st.caption("Compare any EuroLeague matchup. Built by @EL_Statslab.")
 
+    # Minimal sidebar (season selector only, kept for forward compatibility)
     with st.sidebar:
         st.header("Filters")
         seasons = load_seasons()
         season = st.selectbox("Season", seasons, index=0)
-        rounds = load_rounds(int(season))
-        if not rounds:
-            st.error("No rounds found for this season.")
-            st.stop()
-        rnd = st.selectbox("Round (gameday)", rounds, index=len(rounds) - 1)
 
+    schedule_all = load_all_schedule(int(season))
+    if schedule_all.empty:
+        st.error("No schedule data available.")
+        return
+
+    round_labels = build_round_labels(schedule_all)
+    all_rounds_sorted = sorted(round_labels.keys())
+
+    # Load full schedule including "played" status to find the next upcoming round
+    q_full = """
+        SELECT gameday, round AS phase, played
+        FROM schedule
+        WHERE Season = ?
+    """
+    full_sched = pd.read_sql(q_full, get_conn(), params=(int(season),))
+
+    # Per-round status: a round is "fully played" if all its games have played='true'
+    round_status = (
+        full_sched.groupby("gameday")["played"]
+        .apply(lambda s: (s == "true").all())
+        .to_dict()
+    )
+    # Next upcoming round = smallest gameday that is not fully played
+    upcoming_rounds = [gd for gd in all_rounds_sorted if not round_status.get(gd, True)]
+    current_round = upcoming_rounds[0] if upcoming_rounds else all_rounds_sorted[-1]
+
+    # Detect postseason rounds (any round whose phase is PI/PO/FF)
+    postseason_rounds = [
+        gd for gd in all_rounds_sorted
+        if schedule_all[schedule_all["gameday"] == gd]["phase"].iloc[0]
+        in ("PI", "PO", "FF")
+    ]
+
+    # Build the selector: we want to always include the current round plus
+    # surrounding context, so users never lose sight of upcoming games.
+    if postseason_rounds and current_round in postseason_rounds:
+        # We are in the postseason: show all postseason rounds
+        selector_rounds = postseason_rounds
+        section_title = "Postseason"
+    elif postseason_rounds:
+        # Postseason exists in the schedule but we're still in regular season:
+        # show last few regular season rounds + the first postseason rounds
+        current_idx = all_rounds_sorted.index(current_round)
+        # Show 3 rounds before current + current + next 3
+        start = max(0, current_idx - 3)
+        end = min(len(all_rounds_sorted), current_idx + 4)
+        selector_rounds = all_rounds_sorted[start:end]
+        section_title = "Matchdays"
+    else:
+        # Pure regular season: show a window around the current round
+        current_idx = all_rounds_sorted.index(current_round)
+        start = max(0, current_idx - 3)
+        end = min(len(all_rounds_sorted), current_idx + 4)
+        selector_rounds = all_rounds_sorted[start:end]
+        section_title = "Regular Season"
+
+    # Default selection is the current upcoming round (or fallback)
+    default_round = current_round if current_round in selector_rounds else selector_rounds[-1]
+
+    # Phase selector as horizontal pills
+    st.markdown(f"### {section_title}")
+
+    # Short labels for the radio
+    short_labels = [round_labels[gd][0] for gd in selector_rounds]
+    label_to_round = dict(zip(short_labels, selector_rounds))
+    try:
+        default_index = selector_rounds.index(default_round)
+    except ValueError:
+        default_index = len(selector_rounds) - 1
+
+    selected_label = st.radio(
+        "Select a round",
+        options=short_labels,
+        index=default_index,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    rnd = label_to_round[selected_label]
+
+    # Secondary selector: access any regular season round on demand.
+    # Only shown when we are in the postseason section, since otherwise
+    # regular season rounds are already accessible in the main selector.
+    if section_title == "Postseason":
+        rs_rounds = [
+            gd for gd in all_rounds_sorted
+            if schedule_all[schedule_all["gameday"] == gd]["phase"].iloc[0] == "RS"
+        ]
+        if rs_rounds:
+            # Are we currently browsing a regular season round?
+            browsing_rs = st.session_state.get("browse_rs_round") is not None
+
+            if browsing_rs:
+                # Show a prominent "back" button, then the round selector
+                back_col, select_col = st.columns([1, 3])
+                with back_col:
+                    if st.button("← Back to Postseason",
+                                 use_container_width=True,
+                                 type="primary"):
+                        st.session_state["browse_rs_round"] = None
+                        st.rerun()
+                with select_col:
+                    rs_options = [f"Round {gd}" for gd in rs_rounds]
+                    current_rs = st.session_state["browse_rs_round"]
+                    current_label = f"Round {current_rs}"
+                    try:
+                        idx = rs_options.index(current_label)
+                    except ValueError:
+                        idx = 0
+                    chosen = st.selectbox(
+                        "Regular season round",
+                        options=rs_options,
+                        index=idx,
+                        label_visibility="collapsed",
+                    )
+                    new_rnd = int(chosen.replace("Round ", ""))
+                    if new_rnd != current_rs:
+                        st.session_state["browse_rs_round"] = new_rnd
+                        st.rerun()
+                rnd = st.session_state["browse_rs_round"]
+            else:
+                # Not browsing yet: show the entry dropdown
+                rs_options = ["— Or browse regular season —"] + [
+                    f"Round {gd}" for gd in rs_rounds
+                ]
+                chosen = st.selectbox(
+                    "Browse regular season",
+                    options=rs_options,
+                    index=0,
+                    label_visibility="collapsed",
+                )
+                if chosen != rs_options[0]:
+                    st.session_state["browse_rs_round"] = int(
+                        chosen.replace("Round ", "")
+                    )
+                    st.rerun()
+
+    round_label_short, round_label_long = round_labels[rnd]
+
+    # Load matchday
     games = load_matchday(int(season), int(rnd))
     if games.empty:
         st.warning("No games for this round.")
@@ -745,30 +1073,35 @@ def main():
 
     all_games = load_team_games(int(season))
 
-    st.subheader(f"Round {rnd} → {len(games)} games")
-
-    # Phase detection: PO=playoffs, PI=play-in, FF=final four, otherwise RS
+    # Phase banner
     phase = games["phase"].iloc[0] if "phase" in games.columns else "RS"
-    PHASE_LABELS = {
-        "RS": "Regular Season",
-        "PI": "Play-In",
-        "PO": "Playoffs",
-        "FF": "Final Four",
-    }
     is_postseason = phase in ("PI", "PO", "FF")
-    if is_postseason:
-        st.info(f"📌 {PHASE_LABELS.get(phase, phase)} — predictions are "
-                "disabled because the model is calibrated on regular "
-                "season data.")
 
+    # Section header with game count
+    st.markdown(
+        f"<div style='margin-top:8px;margin-bottom:16px;'>"
+        f"<span style='font-size:1.1rem;font-weight:600;color:#1a1a1a;'>"
+        f"{round_label_long}</span>"
+        f"<span style='color:#888;margin-left:10px;'>· {len(games)} "
+        f"game{'s' if len(games) > 1 else ''}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if is_postseason:
+        st.info("📌 Predictions are disabled during the postseason because "
+                "the model is calibrated on regular season data.")
+
+    # Render match cards
     for idx, g in games.iterrows():
         home, away = g["hometeam"], g["awayteam"]
         hcode, acode = g["homecode"], g["awaycode"]
         home_disp = display_name(hcode, home)
         away_disp = display_name(acode, away)
-
-        label = f"{home_disp}   vs   {away_disp}"
         played = g["played"] == "true"
+
+        # Compute status and score
+        score_text = None
         if played:
             match_row = all_games[
                 (all_games["gameday"] == int(rnd)) &
@@ -777,181 +1110,79 @@ def main():
             if not match_row.empty:
                 sh = int(match_row.iloc[0]["score"])
                 sa = int(match_row.iloc[0]["opp_score"])
-                label += f"   ({sh} {sa})"
+                score_text = f"{sh} — {sa}"
+            status_text = "Final"
+            status_colour = "#2ea043"
         else:
-            label += "   (upcoming)"
+            status_text = "Upcoming"
+            status_colour = "#1e88e5"
 
-        # Only the last match where the user generated a PNG stays open
-        match_id = f"{rnd}_{hcode}_{acode}"
-        is_active = st.session_state.get("active_match") == match_id
-
-        with st.expander(label, expanded=is_active):
-            up_to = int(rnd) if played else int(rnd) - 1
-            standings_scope = team_season_stats(all_games, up_to)
-
-            if standings_scope.empty:
-                st.info("No season data available yet.")
-                continue
-
+        game_date = g.get("date")
+        if pd.notna(game_date):
             try:
-                h_row = standings_scope.loc[
-                    standings_scope["team"].str.upper() == home.upper()
-                ].iloc[0]
-                a_row = standings_scope.loc[
-                    standings_scope["team"].str.upper() == away.upper()
-                ].iloc[0]
-            except IndexError:
-                st.warning("One of the teams has no prior games in this season scope.")
-                continue
+                dt = pd.to_datetime(game_date, format="%b %d, %Y")
+                date_str = dt.strftime("%a %b %d")
+                if g.get("startime"):
+                    date_str += f" · {g['startime']}"
+            except Exception:
+                date_str = str(game_date)
+        else:
+            date_str = None
 
-            h_season = h_row.to_dict()
-            a_season = a_row.to_dict()
-            h_recent = team_recent_stats(all_games, home, int(rnd))
-            a_recent = team_recent_stats(all_games, away, int(rnd))
-            h_form = team_form_sequence(all_games, home)
-            a_form = team_form_sequence(all_games, away)
+        # Card container
+        with st.container(border=True):
+            render_match_card(
+                hcode, acode, home_disp, away_disp,
+                score_text, status_text, status_colour, date_str,
+            )
 
-            # Headers
-            hcol, mcol, acol = st.columns([1, 2, 1])
-            with hcol:
-                render_team_header(hcode, home_disp, h_season, h_form)
-            with mcol:
-                st.markdown(
-                    "<div style='text-align:center; padding-top:40px;"
-                    "font-size:24px; font-weight:bold;'>VS</div>",
-                    unsafe_allow_html=True,
-                )
-            with acol:
-                render_team_header(acode, away_disp, a_season, a_form)
+            # Toggle button for the analysis
+            toggle_key = f"open_{rnd}_{hcode}_{acode}"
+            if toggle_key not in st.session_state:
+                st.session_state[toggle_key] = False
 
-            st.divider()
+            is_open = st.session_state[toggle_key]
+            btn_label = "Hide analysis ▲" if is_open else "View analysis ▼"
 
-            col1, col2 = st.columns(2)
-            with col1:
-                render_comparison_styled("Season", home_disp, away_disp,
-                                         h_season, a_season)
-            with col2:
-                if played:
-                    h_game = team_single_game_stats(all_games, home, int(rnd))
-                    a_game = team_single_game_stats(all_games, away, int(rnd))
-                    render_comparison_styled("This Game",
-                                             home_disp, away_disp,
-                                             h_game, a_game)
-                else:
-                    render_comparison_styled(f"Last {ROLLING_WINDOW}",
-                                             home_disp, away_disp,
-                                             h_recent, a_recent)
+            if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
+                         use_container_width=True):
+                st.session_state[toggle_key] = not is_open
+                st.rerun()
 
-            pred = predict_home_win_pct(standings_scope, home, away,
-                                        h_recent, a_recent)
-            st.markdown("**Win probability**")
-            if is_postseason:
-                st.markdown(
-                    "<div style='text-align:center; padding:14px; "
-                    "background:#f5f5f5; border-radius:6px; color:#666; "
-                    "font-style:italic;'>"
-                    "Predictions disabled for playoffs"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                pcol1, pcol2 = st.columns(2)
-                pcol1.metric(f"{home_disp} (Home)",
-                             f"{pred['home_prob']*100:.1f}%")
-                pcol2.metric(f"{away_disp} (Away)",
-                             f"{pred['away_prob']*100:.1f}%")
-
-                with st.popover("How is this calculated?"):
-                    st.markdown(
-                        "The win probability blends several signals: each "
-                        "team's season long efficiency profile, their recent "
-                        "form, the current standings, and the home court "
-                        "factor. Each element contributes to a weighted "
-                        "estimate, calibrated from historical EuroLeague "
-                        "results."
-                    )
-
-            st.divider()
-
-            # --- PNG export: lazy generation, no page rerun ---
-            png_key = f"png_{idx}_{rnd}_{hcode}_{acode}"
-
-            if png_key not in st.session_state:
-                if st.button("📥 Generate downloadable image",
-                             key=f"btn_{idx}"):
-                    st.session_state["active_match"] = match_id
-                    with st.spinner("Generating image..."):
-                        if is_postseason:
-                            rl = f"{PHASE_LABELS.get(phase, phase)} Round {rnd}"
-                        else:
-                            rl = f"Round {rnd}"
-                        # Decide what goes in the right table
-                        if played:
-                            h_right_data = team_single_game_stats(
-                                all_games, home, int(rnd))
-                            a_right_data = team_single_game_stats(
-                                all_games, away, int(rnd))
-                            right_lbl = "This Game"
-                        else:
-                            h_right_data = h_recent
-                            a_right_data = a_recent
-                            right_lbl = f"Last {ROLLING_WINDOW}"
-                        st.session_state[png_key] = build_preview_png(
-                            home_code=hcode, home_name=home_disp,
-                            home_rank=int(h_season["rank"]),
-                            home_wl=f"{int(h_season['wins'])}W "
-                                    f"{int(h_season['losses'])}L",
-                            home_form=h_form,
-                            away_code=acode, away_name=away_disp,
-                            away_rank=int(a_season["rank"]),
-                            away_wl=f"{int(a_season['wins'])}W "
-                                    f"{int(a_season['losses'])}L",
-                            away_form=a_form,
-                            h_season=h_season, a_season=a_season,
-                            h_right=h_right_data, a_right=a_right_data,
-                            home_prob=pred["home_prob"],
-                            away_prob=pred["away_prob"],
-                            round_label=rl,
-                            show_prediction=not is_postseason,
-                            right_label=right_lbl,
-                        )
-                    st.rerun()
-
-            if png_key in st.session_state:
-                st.download_button(
-                    label="📥 Download",
-                    data=st.session_state[png_key],
-                    file_name=f"R{rnd}_{hcode}_vs_{acode}.png",
-                    mime="image/png",
-                    key=f"dl_{idx}",
+            if st.session_state[toggle_key]:
+                st.divider()
+                render_match_analysis(
+                    g, int(rnd), all_games, phase, round_label_long,
+                    card_index=idx,
                 )
 
     st.divider()
-    
+
+    # Info sections
     with st.expander("📖 How to read the stats"):
         st.markdown("""
     *Section 1* : **Efficiency Ratings**
-                    
-**ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better. A top-tier EuroLeague offense typically runs between 115 and 122.                
-**DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better. A top-tier EuroLeague defense typically runs between 105 and 112.                
-**NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better. A NETRTG above +5 usually indicates a playoff-caliber team.                 
 
-                    
+**ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better. A top-tier EuroLeague offense typically runs between 115 and 122.
+**DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better. A top-tier EuroLeague defense typically runs between 105 and 112.
+**NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better. A NETRTG above +5 usually indicates a playoff-caliber team.
+
+
 *Section 2* : **Shooting and Ball Control**
-                    
-**eFG% (Effective Field Goal Percentage)** : Shooting efficiency that accounts for the extra value of three-pointers. Formula: (2PM + 1.5 × 3PM) / FGA. Higher is better. Top EuroLeague teams sit around 55% eFG.               
-**TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better. A disciplined team stays below 13% TOV.             
-**AST% (Assist Percentage)** : Share of made field goals created from an assist. Higher is better. Teams with strong ball movement exceed 65% AST.               
 
-                     
+**eFG% (Effective Field Goal Percentage)** : Shooting efficiency that accounts for the extra value of three-pointers. Formula: (2PM + 1.5 × 3PM) / FGA. Higher is better. Top EuroLeague teams sit around 55% eFG.
+**TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better. A disciplined team stays below 13% TOV.
+**AST% (Assist Percentage)** : Share of made field goals created from an assist. Higher is better. Teams with strong ball movement exceed 65% AST.
+
+
 *Section 3* : **Rebounding**
-                    
-**OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed by the team. Higher is better. Elite offensive rebounding teams reach 32% and above.            
-**REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed by the team. Higher is better. A balanced team sits around 50%.            
 
-                
+**OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed by the team. Higher is better. Elite offensive rebounding teams reach 32% and above.
+**REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed by the team. Higher is better. A balanced team sits around 50%.
+
+
 *Section 4* : **How to read the tables**
-                    
+
 The comparison tables show two teams side by side across the same 8 metrics. For each row, both values are color-coded based on which team leads in that area:
 
 **Green** means this team has the advantage. The more intense the green, the bigger the advantage.
@@ -960,19 +1191,18 @@ The comparison tables show two teams side by side across the same 8 metrics. For
 
 The right-hand table switches automatically: for upcoming games it shows each team's last 5 games average, for played games it shows the actual game stats compared against each team's season average.
     """)
-    
+
     with st.expander("ℹ️ About ELSTATSLAB Match Center"):
         st.markdown(
             """
-            
-           **ELSTATSLAB Match Center** is an independent EuroLeague analytics
+            **ELSTATSLAB Match Center** is an independent EuroLeague analytics
             tool that lets you compare any matchup of the season at a glance.
 
-            For upcoming games, you get a season profile, recent form (last 5 games),
-            and a win probability estimate.
-
-            For played games, the right column switches to "This Game" so you can
-            see how each team performed compared to their season average.
+            For each game you can explore:
+            - Both teams' season long efficiency profile (ORTG, DRTG, NETRTG, REB%, AST%)
+            - Their form over the last 5 games
+            - Standings, win-loss record and recent results
+            - A win probability estimate during the regular season
 
             Built and maintained by **[@EL_Statslab](https://twitter.com/EL_Statslab)**,
             an independent EuroLeague analytics project sharing daily insights
@@ -985,6 +1215,10 @@ The right-hand table switches automatically: for upcoming games it shows each te
         )
 
     st.caption("DataViz by @EL_Statslab")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
