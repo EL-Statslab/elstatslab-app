@@ -158,6 +158,94 @@ def load_official_standings() -> pd.DataFrame | None:
 
 
 @st.cache_data(ttl=600)
+def load_playoffs_schedule(season: int) -> pd.DataFrame:
+    """Load all playoffs games (phase=PO) for the season, for series score calc."""
+    q = """
+        SELECT gameday, hometeam, homecode, awayteam, awaycode, played
+        FROM schedule
+        WHERE Season = ? AND round = 'PO'
+        ORDER BY gameday
+    """
+    return pd.read_sql(q, get_conn(), params=(season,))
+
+
+def get_series_score(playoffs_schedule: pd.DataFrame,
+                     all_games: pd.DataFrame,
+                     hcode: str, acode: str,
+                     current_gameday: int) -> dict | None:
+    """
+    Compute the series score (wins for each team) for a PO matchup.
+
+    The "series home team" is determined by the Game 1 matchup (smallest
+    gameday where these two teams meet in PO). Home/away may alternate
+    across games but the series home team stays fixed.
+
+    Returns a dict with keys:
+        home_code, away_code, home_wins, away_wins, games_played
+    or None if no data is available.
+    """
+    if playoffs_schedule.empty:
+        return None
+
+    # Find all PO gamedays where these two teams face each other
+    mask = (
+        (
+            (playoffs_schedule["homecode"].str.upper() == hcode.upper()) &
+            (playoffs_schedule["awaycode"].str.upper() == acode.upper())
+        ) | (
+            (playoffs_schedule["homecode"].str.upper() == acode.upper()) &
+            (playoffs_schedule["awaycode"].str.upper() == hcode.upper())
+        )
+    )
+    series_games = playoffs_schedule[mask].sort_values("gameday")
+
+    if series_games.empty:
+        return None
+
+    # Series home team = hometeam in Game 1
+    game1 = series_games.iloc[0]
+    series_home_code = game1["homecode"].upper()
+    series_away_code = game1["awaycode"].upper()
+
+    # Count wins from all_games for played games up to and including current_gameday
+    home_wins = 0
+    away_wins = 0
+    games_played = 0
+
+    for _, sg in series_games.iterrows():
+        if sg["gameday"] > current_gameday:
+            break
+        if sg["played"] != "true":
+            continue
+        # Find the result in all_games
+        result = all_games[
+            (all_games["gameday"] == int(sg["gameday"])) &
+            (all_games["team_code"].str.upper() == sg["homecode"].upper())
+        ]
+        if result.empty:
+            continue
+        row = result.iloc[0]
+        games_played += 1
+        if row["score"] > row["opp_score"]:
+            winner_code = sg["homecode"].upper()
+        else:
+            winner_code = sg["awaycode"].upper()
+
+        if winner_code == series_home_code:
+            home_wins += 1
+        else:
+            away_wins += 1
+
+    return {
+        "home_code": series_home_code,
+        "away_code": series_away_code,
+        "home_wins": home_wins,
+        "away_wins": away_wins,
+        "games_played": games_played,
+    }
+
+
+@st.cache_data(ttl=600)
 def load_matchday(season: int, gameday: int) -> pd.DataFrame:
     q = """
         SELECT gamecode, date, startime, round AS phase,
@@ -475,7 +563,8 @@ def render_comparison_styled(label: str, home: str, away: str,
 
 def render_team_header(code: str, disp_name: str,
                        standings_row: dict | None,
-                       form_seq: list[bool]):
+                       form_seq: list[bool],
+                       is_postseason: bool = False):
     lp = logo_path(code)
     logo_html = ""
     if lp:
@@ -491,7 +580,7 @@ def render_team_header(code: str, disp_name: str,
             f"object-fit:contain;'/>"
         )
 
-    if standings_row:
+    if standings_row and not is_postseason:
         rk = standings_row.get("rank", "?")
         w = int(standings_row.get("wins", 0))
         l = int(standings_row.get("losses", 0))
@@ -530,7 +619,8 @@ def render_match_card(hcode: str, acode: str,
                       score_text: str | None,
                       status_text: str,
                       status_colour: str,
-                      game_date: str | None):
+                      game_date: str | None,
+                      series_score: dict | None = None):
     """Render a compact visual match card with both logos, names and status."""
     h_b64 = logo_b64(hcode)
     a_b64 = logo_b64(acode)
@@ -562,6 +652,28 @@ def render_match_card(hcode: str, acode: str,
         if game_date else ""
     )
 
+    # Series score block (PO only)
+    series_html = ""
+    if series_score and series_score["games_played"] > 0:
+        hw = series_score["home_wins"]
+        aw = series_score["away_wins"]
+        # Colour the leading team's score in green
+        if hw > aw:
+            hw_col, aw_col = "#2ea043", "#1a1a1a"
+        elif aw > hw:
+            hw_col, aw_col = "#1a1a1a", "#2ea043"
+        else:
+            hw_col, aw_col = "#1a1a1a", "#1a1a1a"
+        series_html = (
+            f"<div style='margin-top:6px;font-size:0.8rem;color:#555;"
+            f"font-weight:500;letter-spacing:0.3px;'>Series</div>"
+            f"<div style='font-size:1.1rem;font-weight:bold;letter-spacing:2px;'>"
+            f"<span style='color:{hw_col};'>{hw}</span>"
+            f"<span style='color:#aaa;margin:0 4px;'>-</span>"
+            f"<span style='color:{aw_col};'>{aw}</span>"
+            f"</div>"
+        )
+
     html = (
         "<div style='display:flex;align-items:center;justify-content:space-between;"
         "padding:4px 0 12px 0;gap:12px;'>"
@@ -582,6 +694,7 @@ def render_match_card(hcode: str, acode: str,
         f"font-weight:600;text-transform:uppercase;letter-spacing:0.5px;'>"
         f"{status_text}</div>"
         f"{date_html}"
+        f"{series_html}"
         "</div>"
         # Away block
         "<div style='flex:1;display:flex;flex-direction:column;align-items:center;"
@@ -799,13 +912,15 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
 def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                           phase: str, round_label_long: str,
                           card_index: int,
-                          official_standings: pd.DataFrame | None = None):
+                          official_standings: pd.DataFrame | None = None,
+                          playoffs_schedule: pd.DataFrame | None = None):
     home, away = g["hometeam"], g["awayteam"]
     hcode, acode = g["homecode"], g["awaycode"]
     home_disp = display_name(hcode, home)
     away_disp = display_name(acode, away)
     played = g["played"] == "true"
     is_postseason = phase in ("PI", "PO", "FF")
+    is_playoffs = phase == "PO"
 
     up_to = int(rnd) if played else int(rnd) - 1
     standings_scope = team_season_stats(all_games, up_to, official_standings)
@@ -832,17 +947,40 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     h_form = team_form_sequence(all_games, home)
     a_form = team_form_sequence(all_games, away)
 
+    # Series score for playoffs
+    series = None
+    if is_playoffs and playoffs_schedule is not None:
+        series = get_series_score(playoffs_schedule, all_games, hcode, acode, int(rnd))
+
     hcol, mcol, acol = st.columns([1, 2, 1])
     with hcol:
-        render_team_header(hcode, home_disp, h_season, h_form)
+        render_team_header(hcode, home_disp, h_season, h_form,
+                           is_postseason=is_postseason)
     with mcol:
+        # VS + series score if playoffs
+        vs_extra = ""
+        if series and series["games_played"] > 0:
+            hw, aw = series["home_wins"], series["away_wins"]
+            hw_col = "#2ea043" if hw > aw else ("#da3633" if hw < aw else "#1a1a1a")
+            aw_col = "#2ea043" if aw > hw else ("#da3633" if aw < hw else "#1a1a1a")
+            vs_extra = (
+                f"<div style='margin-top:8px;font-size:0.85rem;color:#555;"
+                f"font-weight:500;'>Series</div>"
+                f"<div style='font-size:1.3rem;font-weight:bold;letter-spacing:3px;'>"
+                f"<span style='color:{hw_col};'>{hw}</span>"
+                f"<span style='color:#aaa;margin:0 6px;'>-</span>"
+                f"<span style='color:{aw_col};'>{aw}</span>"
+                f"</div>"
+            )
         st.markdown(
             "<div style='text-align:center; padding-top:40px;"
-            "font-size:24px; font-weight:bold;'>VS</div>",
+            f"font-size:24px; font-weight:bold;'>VS</div>"
+            f"<div style='text-align:center;'>{vs_extra}</div>",
             unsafe_allow_html=True,
         )
     with acol:
-        render_team_header(acode, away_disp, a_season, a_form)
+        render_team_header(acode, away_disp, a_season, a_form,
+                           is_postseason=is_postseason)
 
     st.divider()
 
@@ -1102,6 +1240,7 @@ def main():
 
     all_games = load_team_games(int(season))
     official_standings = load_official_standings()
+    playoffs_schedule = load_playoffs_schedule(int(season))
 
     # Phase banner
     phase = games["phase"].iloc[0] if "phase" in games.columns else "RS"
@@ -1159,11 +1298,19 @@ def main():
         else:
             date_str = None
 
+        # Series score for PO cards
+        is_playoffs_phase = phase == "PO"
+        series = None
+        if is_playoffs_phase and not playoffs_schedule.empty:
+            series = get_series_score(playoffs_schedule, all_games,
+                                      hcode, acode, int(rnd))
+
         # Card container
         with st.container(border=True):
             render_match_card(
                 hcode, acode, home_disp, away_disp,
                 score_text, status_text, status_colour, date_str,
+                series_score=series,
             )
 
             # Toggle button for the analysis
@@ -1185,6 +1332,7 @@ def main():
                     g, int(rnd), all_games, phase, round_label_long,
                     card_index=idx,
                     official_standings=official_standings,
+                    playoffs_schedule=playoffs_schedule,
                 )
 
     st.divider()
