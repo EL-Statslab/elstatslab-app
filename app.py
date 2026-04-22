@@ -420,6 +420,7 @@ def build_round_labels(schedule_df: pd.DataFrame) -> dict[int, tuple[str, str]]:
     """
     labels: dict[int, tuple[str, str]] = {}
     po_counter = 0
+    pi_counter = 0
     ff_counter = 0
     # Take first phase per gameday (all games of a gameday share the phase)
     by_day = schedule_df.drop_duplicates("gameday").sort_values("gameday")
@@ -431,7 +432,9 @@ def build_round_labels(schedule_df: pd.DataFrame) -> dict[int, tuple[str, str]]:
             short = f"Playoffs Game {po_counter}"
             labels[gd] = (short, short)
         elif ph == "PI":
-            labels[gd] = ("Play-In", "Play-In")
+            pi_counter += 1
+            short = "Play-In" if pi_counter == 1 else f"Play-In Game {pi_counter}"
+            labels[gd] = (short, short)
         elif ph == "FF":
             ff_counter += 1
             if ff_counter == 1:
