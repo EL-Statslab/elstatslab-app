@@ -784,8 +784,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
-        ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
-                     ha="center", va="top", fontsize=11, color="#555555")
         if form:
             n = len(form)
             sq = 0.022
