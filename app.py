@@ -19,11 +19,11 @@ import streamlit as st
 from matplotlib.gridspec import GridSpec
 from PIL import Image
 
+from gameflow_chart import render_gameflow_png
+
 # =============================================================================
 # CONFIG
 # =============================================================================
-# On Streamlit Cloud, euroleague_public.db sits next to app.py (relative path).
-# In local developer mode, both DBs live in the parent Euroleague_Stats folder.
 _PUBLIC_DB_LOCAL = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague_public.db")
 _PUBLIC_DB_CLOUD = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
@@ -34,6 +34,7 @@ elif _PUBLIC_DB_CLOUD.exists():
     DB_PATH = _PUBLIC_DB_CLOUD
 else:
     DB_PATH = _LOCAL_DB
+
 LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
@@ -108,12 +109,22 @@ def logo_path(code: str) -> Path | None:
 
 @st.cache_data(ttl=3600)
 def logo_b64(code: str) -> str | None:
-    """Return base64 encoded logo for inlining in HTML cards."""
     lp = logo_path(code)
     if not lp:
         return None
     with open(lp, "rb") as f:
         return base64.b64encode(f.read()).decode()
+
+
+# =============================================================================
+# GAMEFLOW
+# =============================================================================
+@st.cache_data(ttl=3600)
+def get_gameflow_png(gamecode: int, season: int, aspect: str = "square") -> bytes | None:
+    try:
+        return render_gameflow_png(gamecode, season, aspect=aspect)
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -138,7 +149,6 @@ def load_rounds(season: int) -> list[int]:
 
 @st.cache_data(ttl=600)
 def load_all_schedule(season: int) -> pd.DataFrame:
-    """Load every scheduled game of the season once, for phase detection."""
     q = """
         SELECT gameday, round AS phase
         FROM schedule
@@ -150,7 +160,6 @@ def load_all_schedule(season: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=600)
 def load_official_standings() -> pd.DataFrame | None:
-    """Load official standings from the API-fed table if available."""
     try:
         return pd.read_sql("SELECT * FROM standings_official", get_conn())
     except Exception:
@@ -159,7 +168,6 @@ def load_official_standings() -> pd.DataFrame | None:
 
 @st.cache_data(ttl=600)
 def load_playoffs_schedule(season: int) -> pd.DataFrame:
-    """Load all playoffs games (phase=PO) for the season, for series score calc."""
     q = """
         SELECT gameday, hometeam, homecode, awayteam, awaycode, played
         FROM schedule
@@ -173,21 +181,9 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
                      all_games: pd.DataFrame,
                      hcode: str, acode: str,
                      current_gameday: int) -> dict | None:
-    """
-    Compute the series score (wins for each team) for a PO matchup.
-
-    The "series home team" is determined by the Game 1 matchup (smallest
-    gameday where these two teams meet in PO). Home/away may alternate
-    across games but the series home team stays fixed.
-
-    Returns a dict with keys:
-        home_code, away_code, home_wins, away_wins, games_played
-    or None if no data is available.
-    """
     if playoffs_schedule.empty:
         return None
 
-    # Find all PO gamedays where these two teams face each other
     mask = (
         (
             (playoffs_schedule["homecode"].str.upper() == hcode.upper()) &
@@ -202,12 +198,10 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
     if series_games.empty:
         return None
 
-    # Series home team = hometeam in Game 1
     game1 = series_games.iloc[0]
     series_home_code = game1["homecode"].upper()
     series_away_code = game1["awaycode"].upper()
 
-    # Count wins from all_games for played games up to and including current_gameday
     home_wins = 0
     away_wins = 0
     games_played = 0
@@ -217,7 +211,6 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
             break
         if sg["played"] != "true":
             continue
-        # Find the result in all_games
         result = all_games[
             (all_games["gameday"] == int(sg["gameday"])) &
             (all_games["team_code"].str.upper() == sg["homecode"].upper())
@@ -354,7 +347,6 @@ def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int,
     df["rank"] = range(1, len(df) + 1)
     df = df.reset_index(drop=True)
 
-    # Override rank + last_5_form with official standings when available
     if official_standings is not None and not official_standings.empty:
         for i, row in df.iterrows():
             match = official_standings[
@@ -364,7 +356,6 @@ def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int,
                 df.at[i, "rank"] = int(match.iloc[0]["rank"])
                 if "last_5_form" in match.columns:
                     df.at[i, "last_5_form"] = match.iloc[0]["last_5_form"]
-        # Re-sort by official rank
         df = df.sort_values("rank").reset_index(drop=True)
 
     return df
@@ -396,7 +387,7 @@ def team_single_game_stats(all_games: pd.DataFrame, team: str,
 
 
 # =============================================================================
-# ROUND LABELS (Play-In / Playoffs Game 1..N / Final Four / Regular Season)
+# ROUND LABELS
 # =============================================================================
 PHASE_LABELS = {
     "RS": "Regular Season",
@@ -407,22 +398,10 @@ PHASE_LABELS = {
 
 
 def build_round_labels(schedule_df: pd.DataFrame) -> dict[int, tuple[str, str]]:
-    """
-    Build a mapping gameday -> (short_label, long_label) for each round,
-    where Playoffs rounds are numbered Game 1, Game 2...
-
-    Returns e.g. {
-        39: ("Play-In", "Play-In"),
-        40: ("Playoffs Game 1", "Playoffs Game 1"),
-        41: ("Playoffs Game 2", "Playoffs Game 2"),
-        ...
-    }
-    """
     labels: dict[int, tuple[str, str]] = {}
     po_counter = 0
     pi_counter = 0
     ff_counter = 0
-    # Take first phase per gameday (all games of a gameday share the phase)
     by_day = schedule_df.drop_duplicates("gameday").sort_values("gameday")
     for _, row in by_day.iterrows():
         gd = int(row["gameday"])
@@ -533,7 +512,7 @@ def render_comparison_styled(label: str, home: str, away: str,
             f"<td style='background:{bg(h_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{hv_s}</td>"
             f"<td style='background:#f5f5f5;padding:8px 6px;text-align:center;"
-            f"color:#555;border-bottom:1px solid #eee;white-space:nowrap;'>{m}</td>"
+            f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
             f"<td style='background:{bg(a_int)};padding:8px 6px;text-align:center;"
             f"font-weight:bold;border-bottom:1px solid #eee;color:#1a1a1a;'>{av_s}</td>"
             f"<td style='padding:8px 6px;text-align:center;color:#888;"
@@ -624,7 +603,6 @@ def render_match_card(hcode: str, acode: str,
                       status_colour: str,
                       game_date: str | None,
                       series_score: dict | None = None):
-    """Render a compact visual match card with both logos, names and status."""
     h_b64 = logo_b64(hcode)
     a_b64 = logo_b64(acode)
     h_zoom = logo_zoom(hcode)
@@ -655,12 +633,10 @@ def render_match_card(hcode: str, acode: str,
         if game_date else ""
     )
 
-    # Series score block (PO only)
     series_html = ""
     if series_score and series_score["games_played"] > 0:
         hw = series_score["home_wins"]
         aw = series_score["away_wins"]
-        # Colour the leading team's score in green
         if hw > aw:
             hw_col, aw_col = "#2ea043", "#1a1a1a"
         elif aw > hw:
@@ -680,7 +656,6 @@ def render_match_card(hcode: str, acode: str,
     html = (
         "<div style='display:flex;align-items:center;justify-content:space-between;"
         "padding:4px 0 12px 0;gap:12px;'>"
-        # Home block
         "<div style='flex:1;display:flex;flex-direction:column;align-items:center;"
         "min-width:0;'>"
         f"<div style='height:72px;display:flex;align-items:center;justify-content:center;'>"
@@ -689,7 +664,6 @@ def render_match_card(hcode: str, acode: str,
         f"margin-top:6px;color:#1a1a1a;line-height:1.2;min-height:36px;"
         f"display:flex;align-items:center;'>{home_disp}</div>"
         "</div>"
-        # Middle block
         "<div style='display:flex;flex-direction:column;align-items:center;"
         "min-width:80px;'>"
         f"{middle}"
@@ -699,7 +673,6 @@ def render_match_card(hcode: str, acode: str,
         f"{date_html}"
         f"{series_html}"
         "</div>"
-        # Away block
         "<div style='flex:1;display:flex;flex-direction:column;align-items:center;"
         "min-width:0;'>"
         f"<div style='height:72px;display:flex;align-items:center;justify-content:center;'>"
@@ -714,7 +687,7 @@ def render_match_card(hcode: str, acode: str,
 
 
 # =============================================================================
-# PNG EXPORT (matplotlib) -- unchanged
+# PNG EXPORT (matplotlib)
 # =============================================================================
 EL_GREEN = "#2ea043"
 EL_RED   = "#da3633"
@@ -727,6 +700,84 @@ def mpl_colour(intensity: float) -> tuple[float, float, float, float]:
         return (46/255, 160/255, 67/255, alpha)
     alpha = min(0.55, -intensity * 0.6)
     return (218/255, 54/255, 51/255, alpha)
+
+
+# Valeurs de référence EuroLeague pour normaliser le radar (0-100)
+RADAR_RANGES = {
+    "ORTG":   (95,  130),
+    "DRTG":   (95,  130),
+    "NETRTG": (-20, 20),
+    "OREB%":  (20,  45),
+    "REB%":   (42,  58),
+    "AST%":   (45,  80),
+    "eFG%":   (44,  62),
+    "TOV%":   (8,   20),
+}
+# Pour ces métriques, lower = better → on inverse la normalisation
+RADAR_LOWER_IS_BETTER = {"DRTG", "TOV%"}
+
+
+def _normalize_radar(value, metric):
+    """Normalise une valeur entre 0 et 1 pour le radar."""
+    if value is None:
+        return 0.5
+    lo, hi = RADAR_RANGES[metric]
+    norm = (value - lo) / (hi - lo)
+    norm = max(0.0, min(1.0, norm))
+    if metric in RADAR_LOWER_IS_BETTER:
+        norm = 1.0 - norm
+    return norm
+
+
+def build_radar_png(home_name: str, away_name: str,
+                    h_stats: dict, a_stats: dict,
+                    title: str) -> bytes:
+    import numpy as np
+    labels = METRICS
+    n = len(labels)
+    angles = [i * 2 * 3.14159 / n for i in range(n)]
+    angles += angles[:1]
+
+    h_vals = [_normalize_radar(h_stats.get(m), m) for m in labels]
+    a_vals = [_normalize_radar(a_stats.get(m), m) for m in labels]
+    h_vals += h_vals[:1]
+    a_vals += a_vals[:1]
+
+    fig, ax = plt.subplots(figsize=(5, 5), dpi=120,
+                           subplot_kw=dict(polar=True),
+                           facecolor=BG_WHITE)
+    ax.set_facecolor(BG_WHITE)
+
+    # Grilles
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(labels, size=9, color="#444")
+    ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels([])
+    ax.set_ylim(0, 1)
+    ax.grid(color="#e0e0e0", linewidth=0.8)
+    ax.spines["polar"].set_color("#cccccc")
+
+    # Home
+    ax.plot(angles, h_vals, color=EL_GREEN, linewidth=2.0, linestyle="-")
+    ax.fill(angles, h_vals, color=EL_GREEN, alpha=0.15)
+
+    # Away
+    ax.plot(angles, a_vals, color=EL_RED, linewidth=2.0, linestyle="-")
+    ax.fill(angles, a_vals, color=EL_RED, alpha=0.15)
+
+    # Titre et légende
+    ax.set_title(title, size=11, fontweight="bold", pad=18, color="#1a1a1a")
+    fig.text(0.25, 0.02, f"● {home_name}", ha="center", va="bottom",
+             color=EL_GREEN, fontsize=9, fontweight="bold")
+    fig.text(0.75, 0.02, f"● {away_name}", ha="center", va="bottom",
+             color=EL_RED, fontsize=9, fontweight="bold")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120,
+                bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
 
 
 def build_preview_png(home_code: str, home_name: str, home_rank: int,
@@ -784,6 +835,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
+        ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
+                     ha="center", va="top", fontsize=11, color="#555555")
         if form:
             n = len(form)
             sq = 0.022
@@ -908,13 +961,14 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
 
 
 # =============================================================================
-# MATCH ANALYSIS RENDERER (extracted so we can call it from the card)
+# MATCH ANALYSIS RENDERER
 # =============================================================================
 def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                           phase: str, round_label_long: str,
                           card_index: int,
                           official_standings: pd.DataFrame | None = None,
-                          playoffs_schedule: pd.DataFrame | None = None):
+                          playoffs_schedule: pd.DataFrame | None = None,
+                          rnd_season: int = 2025):
     home, away = g["hometeam"], g["awayteam"]
     hcode, acode = g["homecode"], g["awaycode"]
     home_disp = display_name(hcode, home)
@@ -948,7 +1002,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     h_form = team_form_sequence(all_games, home)
     a_form = team_form_sequence(all_games, away)
 
-    # Series score for playoffs
     series = None
     if is_playoffs and playoffs_schedule is not None:
         series = get_series_score(playoffs_schedule, all_games, hcode, acode, int(rnd))
@@ -958,7 +1011,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         render_team_header(hcode, home_disp, h_season, h_form,
                            is_postseason=is_postseason)
     with mcol:
-        # VS + series score if playoffs
         vs_extra = ""
         if series and series["games_played"] > 0:
             hw, aw = series["home_wins"], series["away_wins"]
@@ -985,21 +1037,62 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     st.divider()
 
+    # Toggle switch Table / Radar
+    toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
+    if toggle_key not in st.session_state:
+        st.session_state[toggle_key] = False
+
+    tcol1, tcol2, tcol3 = st.columns([2, 1, 2])
+    with tcol2:
+        use_radar = st.toggle("🕸️ Radar", key=toggle_key, value=st.session_state[toggle_key])
+
     col1, col2 = st.columns(2)
-    with col1:
-        render_comparison_styled("Season", home_disp, away_disp,
-                                 h_season, a_season)
-    with col2:
+    if use_radar:
+        # Vue radar
         if played:
             h_game = team_single_game_stats(all_games, home, int(rnd))
             a_game = team_single_game_stats(all_games, away, int(rnd))
-            render_comparison_styled("This Game",
-                                     home_disp, away_disp,
-                                     h_game, a_game)
+            right_label_str = "This Game"
+            right_h, right_a = h_game, a_game
         else:
-            render_comparison_styled(f"Last {ROLLING_WINDOW}",
-                                     home_disp, away_disp,
-                                     h_recent, a_recent)
+            right_label_str = f"Last {ROLLING_WINDOW}"
+            right_h, right_a = h_recent, a_recent
+        with col1:
+            radar_png = build_radar_png(home_disp, away_disp, h_season, a_season, "Season")
+            st.image(radar_png, use_container_width=True)
+        with col2:
+            radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a, right_label_str)
+            st.image(radar_png2, use_container_width=True)
+    else:
+        # Vue tableau (défaut)
+        with col1:
+            render_comparison_styled("Season", home_disp, away_disp,
+                                     h_season, a_season)
+        with col2:
+            if played:
+                h_game = team_single_game_stats(all_games, home, int(rnd))
+                a_game = team_single_game_stats(all_games, away, int(rnd))
+                render_comparison_styled("This Game",
+                                         home_disp, away_disp,
+                                         h_game, a_game)
+            else:
+                render_comparison_styled(f"Last {ROLLING_WINDOW}",
+                                         home_disp, away_disp,
+                                         h_recent, a_recent)
+
+    # ─── Game Flow ─────────────────────────────────────────────────────────
+    if played:
+        raw_gc = g["gamecode"]
+        if isinstance(raw_gc, str) and "_" in raw_gc:
+            gc_num = int(raw_gc.split("_")[1])
+        else:
+            gc_num = int(raw_gc)
+
+        gf_png = get_gameflow_png(gc_num, rnd_season, aspect="square")
+        if gf_png is not None:
+            st.divider()
+            with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
+                st.image(gf_png, use_container_width=True)
 
     pred = predict_home_win_pct(standings_scope, home, away,
                                 h_recent, a_recent)
@@ -1077,7 +1170,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 # APP
 # =============================================================================
 def main():
-    # Top branding row
     title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
     with title_col1:
         if ELSTATSLAB_LOGO.exists():
@@ -1086,7 +1178,6 @@ def main():
         st.title("ELSTATSLAB Match Center")
         st.caption("Compare any EuroLeague matchup. Built by @EL_Statslab.")
 
-    # Minimal sidebar (season selector only, kept for forward compatibility)
     with st.sidebar:
         st.header("Filters")
         seasons = load_seasons()
@@ -1100,7 +1191,6 @@ def main():
     round_labels = build_round_labels(schedule_all)
     all_rounds_sorted = sorted(round_labels.keys())
 
-    # Load full schedule including "played" status to find the next upcoming round
     q_full = """
         SELECT gameday, round AS phase, played
         FROM schedule
@@ -1108,53 +1198,40 @@ def main():
     """
     full_sched = pd.read_sql(q_full, get_conn(), params=(int(season),))
 
-    # Per-round status: a round is "fully played" if all its games have played='true'
     round_status = (
         full_sched.groupby("gameday")["played"]
         .apply(lambda s: (s == "true").all())
         .to_dict()
     )
-    # Next upcoming round = smallest gameday that is not fully played
     upcoming_rounds = [gd for gd in all_rounds_sorted if not round_status.get(gd, True)]
     current_round = upcoming_rounds[0] if upcoming_rounds else all_rounds_sorted[-1]
 
-    # Detect postseason rounds (any round whose phase is PI/PO/FF)
     postseason_rounds = [
         gd for gd in all_rounds_sorted
         if schedule_all[schedule_all["gameday"] == gd]["phase"].iloc[0]
         in ("PI", "PO", "FF")
     ]
 
-    # Build the selector: we want to always include the current round plus
-    # surrounding context, so users never lose sight of upcoming games.
     if postseason_rounds and current_round in postseason_rounds:
-        # We are in the postseason: show all postseason rounds
         selector_rounds = postseason_rounds
         section_title = "Postseason"
     elif postseason_rounds:
-        # Postseason exists in the schedule but we're still in regular season:
-        # show last few regular season rounds + the first postseason rounds
         current_idx = all_rounds_sorted.index(current_round)
-        # Show 3 rounds before current + current + next 3
         start = max(0, current_idx - 3)
         end = min(len(all_rounds_sorted), current_idx + 4)
         selector_rounds = all_rounds_sorted[start:end]
         section_title = "Matchdays"
     else:
-        # Pure regular season: show a window around the current round
         current_idx = all_rounds_sorted.index(current_round)
         start = max(0, current_idx - 3)
         end = min(len(all_rounds_sorted), current_idx + 4)
         selector_rounds = all_rounds_sorted[start:end]
         section_title = "Regular Season"
 
-    # Default selection is the current upcoming round (or fallback)
     default_round = current_round if current_round in selector_rounds else selector_rounds[-1]
 
-    # Phase selector as horizontal pills
     st.markdown(f"### {section_title}")
 
-    # Short labels for the radio
     short_labels = [round_labels[gd][0] for gd in selector_rounds]
     label_to_round = dict(zip(short_labels, selector_rounds))
     try:
@@ -1172,20 +1249,15 @@ def main():
     )
     rnd = label_to_round[selected_label]
 
-    # Secondary selector: access any regular season round on demand.
-    # Only shown when we are in the postseason section, since otherwise
-    # regular season rounds are already accessible in the main selector.
     if section_title == "Postseason":
         rs_rounds = [
             gd for gd in all_rounds_sorted
             if schedule_all[schedule_all["gameday"] == gd]["phase"].iloc[0] == "RS"
         ]
         if rs_rounds:
-            # Are we currently browsing a regular season round?
             browsing_rs = st.session_state.get("browse_rs_round") is not None
 
             if browsing_rs:
-                # Show a prominent "back" button, then the round selector
                 back_col, select_col = st.columns([1, 3])
                 with back_col:
                     if st.button("← Back to Postseason",
@@ -1214,7 +1286,6 @@ def main():
                         st.rerun()
                 rnd = st.session_state["browse_rs_round"]
             else:
-                # Not browsing yet: show the entry dropdown
                 rs_options = ["— Or browse regular season —"] + [
                     f"Round {gd}" for gd in rs_rounds
                 ]
@@ -1233,7 +1304,6 @@ def main():
 
     round_label_short, round_label_long = round_labels[rnd]
 
-    # Load matchday
     games = load_matchday(int(season), int(rnd))
     if games.empty:
         st.warning("No games for this round.")
@@ -1243,11 +1313,9 @@ def main():
     official_standings = load_official_standings()
     playoffs_schedule = load_playoffs_schedule(int(season))
 
-    # Phase banner
     phase = games["phase"].iloc[0] if "phase" in games.columns else "RS"
     is_postseason = phase in ("PI", "PO", "FF")
 
-    # Section header with game count
     st.markdown(
         f"<div style='margin-top:8px;margin-bottom:16px;'>"
         f"<span style='font-size:1.1rem;font-weight:600;color:#1a1a1a;'>"
@@ -1262,7 +1330,6 @@ def main():
         st.info("📌 Predictions are disabled during the postseason because "
                 "the model is calibrated on regular season data.")
 
-    # Render match cards
     for idx, g in games.iterrows():
         home, away = g["hometeam"], g["awayteam"]
         hcode, acode = g["homecode"], g["awaycode"]
@@ -1270,7 +1337,6 @@ def main():
         away_disp = display_name(acode, away)
         played = g["played"] == "true"
 
-        # Compute status and score
         score_text = None
         if played:
             match_row = all_games[
@@ -1299,14 +1365,12 @@ def main():
         else:
             date_str = None
 
-        # Series score for PO cards
         is_playoffs_phase = phase == "PO"
         series = None
         if is_playoffs_phase and not playoffs_schedule.empty:
             series = get_series_score(playoffs_schedule, all_games,
                                       hcode, acode, int(rnd))
 
-        # Card container
         with st.container(border=True):
             render_match_card(
                 hcode, acode, home_disp, away_disp,
@@ -1314,7 +1378,6 @@ def main():
                 series_score=series,
             )
 
-            # Toggle button for the analysis
             toggle_key = f"open_{rnd}_{hcode}_{acode}"
             if toggle_key not in st.session_state:
                 st.session_state[toggle_key] = False
@@ -1334,19 +1397,18 @@ def main():
                     card_index=idx,
                     official_standings=official_standings,
                     playoffs_schedule=playoffs_schedule,
+                    rnd_season=int(season),
                 )
 
     st.divider()
 
-    # Info sections
     with st.expander("📖 How to read the stats"):
         st.markdown("""
-    *Section 1* : **Efficiency Ratings**
+*Section 1* : **Efficiency Ratings**
 
 **ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better. A top-tier EuroLeague offense typically runs between 115 and 122.
 **DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better. A top-tier EuroLeague defense typically runs between 105 and 112.
 **NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better. A NETRTG above +5 usually indicates a playoff-caliber team.
-
 
 *Section 2* : **Shooting and Ball Control**
 
@@ -1354,12 +1416,10 @@ def main():
 **TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better. A disciplined team stays below 13% TOV.
 **AST% (Assist Percentage)** : Share of made field goals created from an assist. Higher is better. Teams with strong ball movement exceed 65% AST.
 
-
 *Section 3* : **Rebounding**
 
 **OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed by the team. Higher is better. Elite offensive rebounding teams reach 32% and above.
 **REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed by the team. Higher is better. A balanced team sits around 50%.
-
 
 *Section 4* : **How to read the tables**
 
