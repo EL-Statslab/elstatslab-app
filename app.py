@@ -713,12 +713,10 @@ RADAR_RANGES = {
     "eFG%":   (44,  62),
     "TOV%":   (8,   20),
 }
-# Pour ces métriques, lower = better → on inverse la normalisation
 RADAR_LOWER_IS_BETTER = {"DRTG", "TOV%"}
 
 
 def _normalize_radar(value, metric):
-    """Normalise une valeur entre 0 et 1 pour le radar."""
     if value is None:
         return 0.5
     lo, hi = RADAR_RANGES[metric]
@@ -747,8 +745,6 @@ def build_radar_png(home_name: str, away_name: str,
                            subplot_kw=dict(polar=True),
                            facecolor=BG_WHITE)
     ax.set_facecolor(BG_WHITE)
-
-    # Grilles
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(labels, size=9, color="#444")
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
@@ -756,16 +752,10 @@ def build_radar_png(home_name: str, away_name: str,
     ax.set_ylim(0, 1)
     ax.grid(color="#e0e0e0", linewidth=0.8)
     ax.spines["polar"].set_color("#cccccc")
-
-    # Home
     ax.plot(angles, h_vals, color=EL_GREEN, linewidth=2.0, linestyle="-")
     ax.fill(angles, h_vals, color=EL_GREEN, alpha=0.15)
-
-    # Away
     ax.plot(angles, a_vals, color=EL_RED, linewidth=2.0, linestyle="-")
     ax.fill(angles, a_vals, color=EL_RED, alpha=0.15)
-
-    # Titre et légende
     ax.set_title(title, size=11, fontweight="bold", pad=18, color="#1a1a1a")
     fig.text(0.25, 0.02, f"● {home_name}", ha="center", va="bottom",
              color=EL_GREEN, fontsize=9, fontweight="bold")
@@ -789,7 +779,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       home_prob: float, away_prob: float,
                       round_label: str,
                       show_prediction: bool = True,
-                      right_label: str = "Last 5") -> bytes:
+                      right_label: str = "Last 5",
+                      series_score: dict | None = None) -> bytes:
     fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
     gs = GridSpec(
         nrows=5, ncols=2,
@@ -835,8 +826,19 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
-        ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
-                     ha="center", va="top", fontsize=11, color="#555555")
+        # En playoffs : afficher le score de série, sinon rang et bilan
+        if not show_prediction and series_score:
+            hw = series_score["home_wins"]
+            aw = series_score["away_wins"]
+            if x_center < 0.5:
+                series_text = f"Series  {hw} - {aw}"
+            else:
+                series_text = f"Series  {aw} - {hw}"
+            ax_head.text(x_center, 0.20, series_text,
+                         ha="center", va="top", fontsize=11, color="#555555")
+        else:
+            ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
+                         ha="center", va="top", fontsize=11, color="#555555")
         if form:
             n = len(form)
             sq = 0.022
@@ -1048,7 +1050,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     col1, col2 = st.columns(2)
     if use_radar:
-        # Vue radar
         if played:
             h_game = team_single_game_stats(all_games, home, int(rnd))
             a_game = team_single_game_stats(all_games, away, int(rnd))
@@ -1064,7 +1065,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a, right_label_str)
             st.image(radar_png2, use_container_width=True)
     else:
-        # Vue tableau (défaut)
         with col1:
             render_comparison_styled("Season", home_disp, away_disp,
                                      h_season, a_season)
@@ -1153,6 +1153,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     round_label=round_label_long,
                     show_prediction=not is_postseason,
                     right_label=right_lbl,
+                    series_score=series,
                 )
             st.rerun()
 
