@@ -546,7 +546,9 @@ def render_comparison_styled(label: str, home: str, away: str,
 def render_team_header(code: str, disp_name: str,
                        standings_row: dict | None,
                        form_seq: list[bool],
-                       is_postseason: bool = False):
+                       is_postseason: bool = False,
+                       series_score: dict | None = None,
+                       is_home: bool = True):
     lp = logo_path(code)
     logo_html = ""
     if lp:
@@ -562,7 +564,13 @@ def render_team_header(code: str, disp_name: str,
             f"object-fit:contain;'/>"
         )
 
-    if standings_row and not is_postseason:
+    if is_postseason and series_score:
+        hw = series_score["home_wins"]
+        aw = series_score["away_wins"]
+        wins = hw if is_home else aw
+        losses = aw if is_home else hw
+        standings_text = f"Series  {wins} - {losses}"
+    elif standings_row and not is_postseason:
         rk = standings_row.get("rank", "?")
         w = int(standings_row.get("wins", 0))
         l = int(standings_row.get("losses", 0))
@@ -1011,7 +1019,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     hcol, mcol, acol = st.columns([1, 2, 1])
     with hcol:
         render_team_header(hcode, home_disp, h_season, h_form,
-                           is_postseason=is_postseason)
+                           is_postseason=is_postseason,
+                           series_score=series, is_home=True)
     with mcol:
         vs_extra = ""
         if series and series["games_played"] > 0:
@@ -1035,7 +1044,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         )
     with acol:
         render_team_header(acode, away_disp, a_season, a_form,
-                           is_postseason=is_postseason)
+                           is_postseason=is_postseason,
+                           series_score=series, is_home=False)
 
     st.divider()
 
