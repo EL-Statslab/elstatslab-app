@@ -232,10 +232,10 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
             away_wins += 1
 
     return {
-        "home_code": series_home_code,
-        "away_code": series_away_code,
-        "home_wins": home_wins,
-        "away_wins": away_wins,
+        "home_code":    hcode.upper(),   # equipe home du match actuel
+        "away_code":    acode.upper(),   # equipe away du match actuel
+        "home_wins":    home_wins if series_home_code == hcode.upper() else away_wins,
+        "away_wins":    away_wins if series_home_code == hcode.upper() else home_wins,
         "games_played": games_played,
     }
 
