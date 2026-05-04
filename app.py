@@ -12,8 +12,10 @@ import io
 import math
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 from matplotlib.gridspec import GridSpec
@@ -24,7 +26,7 @@ from gameflow_chart import render_gameflow_png
 # =============================================================================
 # CONFIG
 # =============================================================================
-_PUBLIC_DB_LOCAL = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague_public.db")
+_PUBLIC_DB_LOCAL = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP\euroleague_public.db")
 _PUBLIC_DB_CLOUD = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
 
@@ -295,39 +297,39 @@ def load_team_games(season: int) -> pd.DataFrame:
 def aggregate_stats(df: pd.DataFrame) -> dict:
     if df.empty:
         return {}
-    poss   = df["poss"].sum()
-    pts    = df["score"].sum()
-    pa     = df["opp_score"].sum()
-    oreb   = df["oreb"].sum()
-    dreb   = df["dreb"].sum()
-    o_oreb = df["opp_oreb"].sum()
-    o_dreb = df["opp_dreb"].sum()
-    ast    = df["ast"].sum()
-    fgm    = df["fgm"].sum()
-    twopm  = df["twopm"].sum()
+    poss    = df["poss"].sum()
+    pts     = df["score"].sum()
+    pa      = df["opp_score"].sum()
+    oreb    = df["oreb"].sum()
+    dreb    = df["dreb"].sum()
+    o_oreb  = df["opp_oreb"].sum()
+    o_dreb  = df["opp_dreb"].sum()
+    ast     = df["ast"].sum()
+    fgm     = df["fgm"].sum()
+    twopm   = df["twopm"].sum()
     threepm = df["threepm"].sum()
-    twopa  = df["twopa"].sum()
+    twopa   = df["twopa"].sum()
     threepa = df["threepa"].sum()
-    tov    = df["tov"].sum()
-    wins   = int((df["score"] > df["opp_score"]).sum())
-    games  = len(df)
+    tov     = df["tov"].sum()
+    wins    = int((df["score"] > df["opp_score"]).sum())
+    games   = len(df)
 
     def safe(num, den, mult=100.0, nd=1):
         return round(mult * num / den, nd) if den else None
 
     return {
-        "games":  games,
-        "wins":   wins,
-        "losses": games - wins,
+        "games":   games,
+        "wins":    wins,
+        "losses":  games - wins,
         "pt_diff": int(pts - pa),
-        "ORTG":   safe(pts, poss),
-        "DRTG":   safe(pa, poss),
-        "NETRTG": safe(pts - pa, poss),
-        "OREB%":  safe(oreb, oreb + o_dreb),
-        "REB%":   safe(oreb + dreb, oreb + dreb + o_oreb + o_dreb),
-        "AST%":   safe(ast, fgm),
-        "eFG%":   safe(twopm + 1.5 * threepm, twopa + threepa),
-        "TOV%":   safe(tov, poss),
+        "ORTG":    safe(pts, poss),
+        "DRTG":    safe(pa, poss),
+        "NETRTG":  safe(pts - pa, poss),
+        "OREB%":   safe(oreb, oreb + o_dreb),
+        "REB%":    safe(oreb + dreb, oreb + dreb + o_oreb + o_dreb),
+        "AST%":    safe(ast, fgm),
+        "eFG%":    safe(twopm + 1.5 * threepm, twopa + threepa),
+        "TOV%":    safe(tov, poss),
     }
 
 
@@ -426,39 +428,366 @@ def build_round_labels(schedule_df: pd.DataFrame) -> dict[int, tuple[str, str]]:
 
 
 # =============================================================================
-# PREDICTION MODEL
+# MONTE CARLO WIN PROBABILITY MODEL
 # =============================================================================
-WEIGHTS = {"standing": 0.20, "home_away": 0.15, "netrtg": 0.40, "form": 0.25}
-HOME_COURT_ADVANTAGE = 0.06
+TEAM_NAME_MAP = {
+    "Bitci Baskonia Vitoria-Gasteiz":   "Baskonia Vitoria-Gasteiz",
+    "Cazoo Baskonia Vitoria-Gasteiz":   "Baskonia Vitoria-Gasteiz",
+    "Kosner Baskonia Vitoria-Gasteiz":  "Baskonia Vitoria-Gasteiz",
+    "Crvena Zvezda mts Belgrade":       "Crvena Zvezda Meridianbet Belgrade",
+    "AX Armani Exchange Milan":         "EA7 Emporio Armani Milan",
+    "Virtus Segafredo Bologna":         "Virtus Bologna",
+    "Maccabi Rapyd Tel Aviv":           "Maccabi Playtika Tel Aviv",
+    "Panathinaikos Athens":             "Panathinaikos AKTOR Athens",
+    "Panathinaikos OPAP Athens":        "Panathinaikos AKTOR Athens",
+}
+
+MC_MIN_H2H_GAMES  = 4
+MC_MIN_DIST_GAMES = 2
+MC_N_SIMULATIONS  = 10_000
+MC_HOME_COURT     = 0.06
+
+WEIGHTS_RS = {
+    "current_season": 0.50,
+    "h2h":            0.25,
+    "home_court":     0.10,
+    "style_matchup":  0.15,
+}
+WEIGHTS_PO_BASE = {
+    "current_season": 0.35,
+    "h2h":            0.30,
+    "home_court":     0.10,
+    "style_matchup":  0.25,
+}
 
 
-def logistic(x: float, scale: float = 3.0) -> float:
+def _mc_logistic(x: float, scale: float = 2.5) -> float:
     return 1.0 / (1.0 + math.exp(-scale * x))
 
 
-def predict_home_win_pct(standings: pd.DataFrame,
-                         home: str, away: str,
-                         home_recent: dict, away_recent: dict) -> dict:
-    try:
-        h = standings.loc[standings["team"].str.upper() == home.upper()].iloc[0]
-        a = standings.loc[standings["team"].str.upper() == away.upper()].iloc[0]
-    except IndexError:
-        return {"home_prob": 0.5, "away_prob": 0.5, "components": {}}
+def _get_dist(conn, team_name: str, season: int,
+              round_type: str = "RS", seasons_back: int = 1) -> Optional[dict]:
+    rounds = "'RS'" if round_type == "RS" else "'PO', 'FF', 'PI'"
+    season_min = season - seasons_back + 1
+    q = f"""
+        SELECT
+            AVG(t.Score)                                                             AS avg_pts,
+            SQRT(AVG(t.Score * t.Score) - AVG(t.Score) * AVG(t.Score))              AS std_pts,
+            AVG(t.Off_Rtg)                                                           AS avg_ortg,
+            AVG(t.Def_Rtg)                                                           AS avg_drtg,
+            SQRT(AVG(t.Off_Rtg * t.Off_Rtg) - AVG(t.Off_Rtg) * AVG(t.Off_Rtg))     AS std_ortg,
+            SQRT(AVG(t.Def_Rtg * t.Def_Rtg) - AVG(t.Def_Rtg) * AVG(t.Def_Rtg))     AS std_drtg,
+            AVG(t.Pace)                                                              AS avg_pace,
+            COUNT(*)                                                                 AS games
+        FROM team_stats t
+        JOIN schedule s
+            ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = t.GameCode
+            AND s.Season = t.Season
+        WHERE t.Season BETWEEN ? AND ?
+          AND s.round IN ({rounds})
+          AND UPPER(t.TeamName) = UPPER(?)
+          AND s.played = 'true'
+    """
+    row = conn.execute(q, (season_min, season, team_name)).fetchone()
+    if row and row[7] and row[7] >= MC_MIN_DIST_GAMES:
+        keys = ["avg_pts", "std_pts", "avg_ortg", "avg_drtg",
+                "std_ortg", "std_drtg", "avg_pace", "games"]
+        return dict(zip(keys, row))
+    return None
 
-    h_wp = h["wins"] / h["games"] if h["games"] else 0.5
-    a_wp = a["wins"] / a["games"] if a["games"] else 0.5
-    components = {
-        "standing":  logistic(h_wp - a_wp),
-        "home_away": 0.5 + HOME_COURT_ADVANTAGE,
-        "netrtg":    logistic(((h["NETRTG"] or 0) - (a["NETRTG"] or 0)) / 20.0),
-        "form":      logistic(
-            ((home_recent.get("NETRTG") or 0) -
-             (away_recent.get("NETRTG") or 0)) / 20.0),
+
+def _get_h2h(conn, team_a: str, team_b: str,
+             current_season: int = 2025, seasons_back: int = 4,
+             playoff_only: bool = False) -> dict:
+    season_min = current_season - seasons_back + 1
+    round_filter = "AND s.round IN ('PO', 'FF')" if playoff_only else ""
+    q = f"""
+        WITH matchups AS (
+            SELECT
+                CASE WHEN UPPER(s.hometeam) = UPPER(?) THEN h.Score ELSE a.Score END AS score_a,
+                CASE WHEN UPPER(s.hometeam) = UPPER(?) THEN a.Score ELSE h.Score END AS score_b
+            FROM schedule s
+            JOIN team_stats h
+                ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = h.GameCode
+                AND s.Season = h.Season
+                AND UPPER(h.TeamName) = UPPER(s.hometeam)
+            JOIN team_stats a
+                ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = a.GameCode
+                AND s.Season = a.Season
+                AND UPPER(a.TeamName) = UPPER(s.awayteam)
+            WHERE s.played = 'true'
+              AND s.Season BETWEEN ? AND ?
+              AND (
+                    (UPPER(s.hometeam) = UPPER(?) AND UPPER(s.awayteam) = UPPER(?))
+                 OR (UPPER(s.hometeam) = UPPER(?) AND UPPER(s.awayteam) = UPPER(?))
+              )
+              {round_filter}
+        )
+        SELECT COUNT(*) AS games,
+               SUM(CASE WHEN score_a > score_b THEN 1 ELSE 0 END) AS wins_a,
+               ROUND(AVG(score_a - score_b), 2) AS avg_margin
+        FROM matchups
+    """
+    row = conn.execute(q, (
+        team_a, team_a,
+        season_min, current_season,
+        team_a, team_b,
+        team_b, team_a
+    )).fetchone()
+    if row and row[0]:
+        return {"games": row[0], "wins_a": row[1], "avg_margin": row[2] or 0.0}
+    return {"games": 0, "wins_a": 0, "avg_margin": 0.0}
+
+
+def _get_win_pct(conn, team_name: str, season: int) -> float:
+    q = """
+        SELECT
+            COUNT(*) AS games,
+            SUM(CASE
+                WHEN UPPER(s.hometeam) = UPPER(?) AND h.Score > a.Score THEN 1
+                WHEN UPPER(s.awayteam) = UPPER(?) AND a.Score > h.Score THEN 1
+                ELSE 0
+            END) AS wins
+        FROM schedule s
+        JOIN team_stats h
+            ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = h.GameCode
+            AND s.Season = h.Season
+            AND UPPER(h.TeamName) = UPPER(s.hometeam)
+        JOIN team_stats a
+            ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = a.GameCode
+            AND s.Season = a.Season
+            AND UPPER(a.TeamName) = UPPER(s.awayteam)
+        WHERE s.Season = ?
+          AND s.round = 'RS'
+          AND s.played = 'true'
+          AND (UPPER(s.hometeam) = UPPER(?) OR UPPER(s.awayteam) = UPPER(?))
+    """
+    row = conn.execute(q, (team_name, team_name, season, team_name, team_name)).fetchone()
+    if row and row[0]:
+        return row[1] / row[0]
+    return 0.5
+
+
+def _serie_prob_weight(serie_scores: list) -> tuple[float, float]:
+    """Probabilite et poids bases sur les matchs deja joues dans la serie."""
+    if not serie_scores:
+        return 0.5, 0.0
+    n = len(serie_scores)
+    avg = sum(serie_scores) / n
+    prob = _mc_logistic(avg / 15.0)
+    weight_map = {1: 0.20, 2: 0.35, 3: 0.45, 4: 0.50, 5: 0.55}
+    return prob, weight_map.get(n, 0.55)
+
+
+def _get_match_context(conn, gamecode: int) -> Optional[dict]:
+    """
+    Recupere automatiquement depuis la DB tout le contexte
+    necessaire pour calculer la win probability d'un match.
+    Detecte le round et adapte le modele en consequence.
+    """
+    row = conn.execute("""
+        SELECT Season, round, hometeam, awayteam, homecode, awaycode
+        FROM schedule
+        WHERE CAST(SUBSTR(gamecode, INSTR(gamecode, '_') + 1) AS INTEGER) = ?
+    """, (gamecode,)).fetchone()
+
+    if not row:
+        return None
+
+    season, round_, home_team, away_team, home_code, away_code = row
+
+    home_win_pct = _get_win_pct(conn, home_team, season)
+    away_win_pct = _get_win_pct(conn, away_team, season)
+
+    serie_scores     = []
+    home_series_wins = 0
+    away_series_wins = 0
+
+    if round_ in ("PO", "FF", "PI"):
+        played = conn.execute("""
+            SELECT s.hometeam, s.awayteam, h.Score AS hs, a.Score AS as_
+            FROM schedule s
+            JOIN team_stats h
+                ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = h.GameCode
+                AND s.Season = h.Season
+                AND UPPER(h.TeamName) = UPPER(s.hometeam)
+            JOIN team_stats a
+                ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = a.GameCode
+                AND s.Season = a.Season
+                AND UPPER(a.TeamName) = UPPER(s.awayteam)
+            WHERE s.Season = ?
+              AND s.round = ?
+              AND s.played = 'true'
+              AND CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) < ?
+              AND (
+                    (UPPER(s.hometeam) = UPPER(?) AND UPPER(s.awayteam) = UPPER(?))
+                 OR (UPPER(s.hometeam) = UPPER(?) AND UPPER(s.awayteam) = UPPER(?))
+              )
+            ORDER BY s.game_number ASC
+        """, (season, round_, gamecode,
+              home_team, away_team,
+              away_team, home_team)).fetchall()
+
+        for m in played:
+            ht, at, hs, as_ = m
+            margin = hs - as_ if ht.upper() == home_team.upper() else as_ - hs
+            serie_scores.append(margin)
+            if margin > 0:
+                home_series_wins += 1
+            else:
+                away_series_wins += 1
+
+    return {
+        "home_team":        home_team,
+        "away_team":        away_team,
+        "home_code":        home_code,
+        "away_code":        away_code,
+        "season":           season,
+        "round":            round_,
+        "is_playoff":       round_ in ("PO", "FF", "PI"),
+        "home_win_pct":     home_win_pct,
+        "away_win_pct":     away_win_pct,
+        "serie_scores":     serie_scores,
+        "home_series_wins": home_series_wins,
+        "away_series_wins": away_series_wins,
     }
-    home_prob = sum(WEIGHTS[k] * v for k, v in components.items())
-    home_prob = max(0.02, min(0.98, home_prob))
-    return {"home_prob": home_prob, "away_prob": 1 - home_prob,
-            "components": components}
+
+
+def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
+    """
+    Calcule la win probability pour le prochain match.
+    S'adapte automatiquement selon le round detecte :
+      RS  : 4 composantes, home court actif
+      PI  : playoffs sans serie precedente, home court actif
+      PO  : playoffs avec dynamique de serie, home court actif
+      FF  : terrain neutre, home court desactive, pas de serie
+    """
+    home_team    = ctx["home_team"]
+    away_team    = ctx["away_team"]
+    season       = ctx["season"]
+    round_       = ctx["round"]
+    is_playoff   = ctx["is_playoff"]
+    home_win_pct = ctx["home_win_pct"]
+    away_win_pct = ctx["away_win_pct"]
+    serie_scores = ctx["serie_scores"]
+
+    # --- Distributions de performance ---
+    if is_playoff:
+        home_dist = _get_dist(conn, home_team, season, "PO", seasons_back=4)
+        away_dist = _get_dist(conn, away_team, season, "PO", seasons_back=4)
+        if not home_dist:
+            home_dist = _get_dist(conn, home_team, season, "RS", seasons_back=1)
+        if not away_dist:
+            away_dist = _get_dist(conn, away_team, season, "RS", seasons_back=1)
+    else:
+        home_dist = _get_dist(conn, home_team, season, "RS", seasons_back=1)
+        away_dist = _get_dist(conn, away_team, season, "RS", seasons_back=1)
+        if not home_dist:
+            home_dist = _get_dist(conn, home_team, season - 1, "RS", seasons_back=1)
+        if not away_dist:
+            away_dist = _get_dist(conn, away_team, season - 1, "RS", seasons_back=1)
+
+    if not home_dist or not away_dist:
+        return {"home_prob": 0.5, "away_prob": 0.5,
+                "error": "Distributions introuvables"}
+
+    # --- Monte Carlo ---
+    rng = np.random.default_rng()
+    h_scores = rng.normal(home_dist["avg_pts"], home_dist["std_pts"], MC_N_SIMULATIONS)
+    a_scores = rng.normal(away_dist["avg_pts"], away_dist["std_pts"], MC_N_SIMULATIONS)
+    mc_prob  = float(np.mean(h_scores > a_scores))
+    std_err  = math.sqrt(mc_prob * (1 - mc_prob) / MC_N_SIMULATIONS)
+    ci_low   = max(0.02, mc_prob - 1.645 * std_err)
+    ci_high  = min(0.98, mc_prob + 1.645 * std_err)
+
+    # --- H2H ---
+    h2h = _get_h2h(conn, home_team, away_team, season, playoff_only=is_playoff)
+    if h2h["games"] < MC_MIN_H2H_GAMES and is_playoff:
+        h2h = _get_h2h(conn, home_team, away_team, season, playoff_only=False)
+
+    h2h_prob = 0.5
+    if h2h["games"] >= MC_MIN_H2H_GAMES:
+        reliability = min(1.0, h2h["games"] / 10.0)
+        raw_h2h     = _mc_logistic(h2h["avg_margin"] / 15.0)
+        h2h_prob    = 0.5 + reliability * (raw_h2h - 0.5)
+
+    # --- Home court : desactive en Final Four (terrain neutre) ---
+    home_court_prob = 0.5 if round_ == "FF" else (0.5 + MC_HOME_COURT)
+
+    # --- Style matchup ---
+    home_net   = home_dist["avg_ortg"] - away_dist["avg_drtg"]
+    away_net   = away_dist["avg_ortg"] - home_dist["avg_drtg"]
+    style_prob = _mc_logistic((home_net - away_net) / 40.0)
+
+    # --- Saison en cours ---
+    season_prob         = _mc_logistic(home_win_pct - away_win_pct)
+    current_season_prob = 0.6 * mc_prob + 0.4 * season_prob
+
+    # --- Regular Season : 4 composantes fixes ---
+    if not is_playoff:
+        components = {
+            "current_season": round(current_season_prob, 3),
+            "h2h":            round(h2h_prob, 3),
+            "home_court":     round(home_court_prob, 3),
+            "style_matchup":  round(style_prob, 3),
+        }
+        final_prob = sum(WEIGHTS_RS[k] * v for k, v in components.items())
+        final_prob = max(0.02, min(0.98, final_prob))
+        return {
+            "home_prob":       round(final_prob, 3),
+            "away_prob":       round(1 - final_prob, 3),
+            "mc_raw":          round(mc_prob, 3),
+            "confidence_low":  round(ci_low, 3),
+            "confidence_high": round(ci_high, 3),
+            "h2h_games":       h2h["games"],
+            "h2h_margin":      round(h2h["avg_margin"], 2),
+            "serie_prob":      None,
+            "serie_weight":    None,
+            "components":      components,
+            "round":           round_,
+        }
+
+    # --- Playoffs / Play-In / Final Four : dynamique de serie ---
+    serie_prob, serie_weight = _serie_prob_weight(serie_scores)
+    remaining = 1.0 - serie_weight
+    base_w    = {k: v * remaining for k, v in WEIGHTS_PO_BASE.items()}
+
+    components = {
+        "serie_encours":  round(serie_prob, 3),
+        "current_season": round(current_season_prob, 3),
+        "h2h":            round(h2h_prob, 3),
+        "home_court":     round(home_court_prob, 3),
+        "style_matchup":  round(style_prob, 3),
+    }
+
+    final_prob = (serie_weight * serie_prob +
+                  sum(base_w[k] * components[k] for k in WEIGHTS_PO_BASE))
+    final_prob = max(0.02, min(0.98, final_prob))
+
+    return {
+        "home_prob":       round(final_prob, 3),
+        "away_prob":       round(1 - final_prob, 3),
+        "mc_raw":          round(mc_prob, 3),
+        "confidence_low":  round(ci_low, 3),
+        "confidence_high": round(ci_high, 3),
+        "h2h_games":       h2h["games"],
+        "h2h_margin":      round(h2h["avg_margin"], 2),
+        "serie_prob":      round(serie_prob, 3),
+        "serie_weight":    round(serie_weight, 3),
+        "components":      components,
+        "round":           round_,
+    }
+
+
+@st.cache_data(ttl=300)
+def predict_by_gamecode(gamecode: int) -> dict:
+    """Point d'entree principal : gamecode → prediction complete."""
+    conn = get_conn()
+    ctx = _get_match_context(conn, gamecode)
+    if not ctx:
+        return {"home_prob": 0.5, "away_prob": 0.5,
+                "error": f"Gamecode {gamecode} introuvable"}
+    return _monte_carlo_win_prob(conn, ctx)
 
 
 # =============================================================================
@@ -546,9 +875,7 @@ def render_comparison_styled(label: str, home: str, away: str,
 def render_team_header(code: str, disp_name: str,
                        standings_row: dict | None,
                        form_seq: list[bool],
-                       is_postseason: bool = False,
-                       series_score: dict | None = None,
-                       is_home: bool = True):
+                       is_postseason: bool = False):
     lp = logo_path(code)
     logo_html = ""
     if lp:
@@ -564,13 +891,7 @@ def render_team_header(code: str, disp_name: str,
             f"object-fit:contain;'/>"
         )
 
-    if is_postseason and series_score:
-        hw = series_score["home_wins"]
-        aw = series_score["away_wins"]
-        wins = hw if is_home else aw
-        losses = aw if is_home else hw
-        standings_text = f"Series  {wins} - {losses}"
-    elif standings_row and not is_postseason:
+    if standings_row and not is_postseason:
         rk = standings_row.get("rank", "?")
         w = int(standings_row.get("wins", 0))
         l = int(standings_row.get("losses", 0))
@@ -695,6 +1016,92 @@ def render_match_card(hcode: str, acode: str,
 
 
 # =============================================================================
+# WIN PROBABILITY UI
+# =============================================================================
+def render_win_probability(pred: dict, home_disp: str, away_disp: str,
+                           round_: str):
+    hp = pred["home_prob"]
+    ap = pred["away_prob"]
+
+    # Contextual label
+    if round_ == "FF":
+        section_label = "Match edge (Final Four · neutral court)"
+    elif round_ == "PO":
+        section_label = "Match edge (Playoffs)"
+    elif round_ == "PI":
+        section_label = "Win probability (Play-In)"
+    else:
+        section_label = "Win probability"
+
+    st.markdown(f"**{section_label}**")
+
+    # Probability bar
+    bar_html = (
+        "<div style='margin:12px 0 6px 0;'>"
+        "<div style='display:flex;height:28px;border-radius:4px;overflow:hidden;'>"
+        f"<div style='flex:{hp:.3f};background:#2ea043;'></div>"
+        f"<div style='flex:{ap:.3f};background:#da3633;'></div>"
+        "</div>"
+        "<div style='display:flex;justify-content:space-between;"
+        "margin-top:6px;font-size:0.9rem;font-weight:bold;'>"
+        f"<span style='color:#2ea043;'>{home_disp}  {hp*100:.1f}%</span>"
+        f"<span style='color:#da3633;'>{ap*100:.1f}%  {away_disp}</span>"
+        "</div>"
+        "</div>"
+    )
+    st.markdown(bar_html, unsafe_allow_html=True)
+
+    # Confidence interval and H2H context
+    ci_low    = pred.get("confidence_low", hp)
+    ci_high   = pred.get("confidence_high", hp)
+    h2h_games = pred.get("h2h_games", 0)
+    h2h_margin = pred.get("h2h_margin", 0.0)
+
+    if h2h_games > 0:
+        margin_leader = home_disp if h2h_margin >= 0 else away_disp
+        margin_abs = abs(h2h_margin)
+        h2h_text = (
+            f" · {h2h_games} head-to-head games over the last 4 seasons, "
+            f"avg margin {margin_abs:.1f} pts in favor of {margin_leader}"
+        )
+    else:
+        h2h_text = " · No head-to-head history available"
+
+    st.caption(f"Based on {MC_N_SIMULATIONS:,} simulations")
+
+    # Explanatory popover — generic, no weights revealed
+    with st.popover("How is this calculated?"):
+        if round_ == "RS":
+            st.markdown(
+                "The win probability combines multiple signals: each team's current season "
+                "efficiency profile, their head-to-head history over the last 4 seasons, "
+                "home court advantage, and offensive/defensive style matchup. "
+                "Monte Carlo simulation runs thousands of iterations to model the full range "
+                "of possible outcomes based on each team's scoring distribution."
+            )
+        elif round_ == "FF":
+            st.markdown(
+                "The match edge combines each team's current season efficiency, "
+                "their head-to-head history over the last 4 seasons, "
+                "and offensive/defensive style matchup. "
+                "Home court advantage is removed as the Final Four is played on neutral ground. "
+                "Monte Carlo simulation models thousands of possible outcomes "
+                "based on each team's historical scoring distribution in high-stakes games."
+            )
+        else:
+            st.markdown(
+                "The match edge integrates the current series context alongside "
+                "each team's season efficiency, head-to-head history over the last 4 seasons, "
+                "home court advantage, and style matchup. "
+                "As the series progresses, the influence of games already played increases, "
+                "reflecting that recent playoff performance is the strongest predictor "
+                "of the next game outcome. "
+                "Monte Carlo simulation models thousands of possible game outcomes "
+                "based on each team's playoff scoring distribution."
+            )
+
+
+# =============================================================================
 # PNG EXPORT (matplotlib)
 # =============================================================================
 EL_GREEN = "#2ea043"
@@ -710,7 +1117,6 @@ def mpl_colour(intensity: float) -> tuple[float, float, float, float]:
     return (218/255, 54/255, 51/255, alpha)
 
 
-# Valeurs de référence EuroLeague pour normaliser le radar (0-100)
 RADAR_RANGES = {
     "ORTG":   (95,  130),
     "DRTG":   (95,  130),
@@ -738,7 +1144,6 @@ def _normalize_radar(value, metric):
 def build_radar_png(home_name: str, away_name: str,
                     h_stats: dict, a_stats: dict,
                     title: str) -> bytes:
-    import numpy as np
     labels = METRICS
     n = len(labels)
     angles = [i * 2 * 3.14159 / n for i in range(n)]
@@ -771,8 +1176,7 @@ def build_radar_png(home_name: str, away_name: str,
              color=EL_RED, fontsize=9, fontweight="bold")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120,
-                bbox_inches="tight")
+    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
@@ -788,6 +1192,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       round_label: str,
                       show_prediction: bool = True,
                       right_label: str = "Last 5",
+                      round_: str = "RS",
                       series_score: dict | None = None) -> bytes:
     fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
     gs = GridSpec(
@@ -817,13 +1222,13 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_head.set_xlim(0, 1)
     ax_head.set_ylim(0, 1)
 
+    is_postseason_png = round_ in ("PO", "FF", "PI")
+
     def draw_team_block(code, name, rank, wl, form, x_center):
         base_w, base_h = 0.18, 0.55
         zoom = logo_zoom(code)
-        w = base_w * zoom
-        h = base_h * zoom
-        w = min(w, 0.28)
-        h = min(h, 0.85)
+        w = min(base_w * zoom, 0.28)
+        h = min(base_h * zoom, 0.85)
         logo_y = 0.55
         lp = logo_path(code)
         if lp:
@@ -834,18 +1239,12 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
-        # En playoffs : afficher le score de série, sinon rang et bilan
-        if not show_prediction and series_score:
-            hw = series_score["home_wins"]
-            aw = series_score["away_wins"]
-            if x_center < 0.5:
-                series_text = f"Series  {hw} - {aw}"
-            else:
-                series_text = f"Series  {aw} - {hw}"
-            ax_head.text(x_center, 0.20, series_text,
+        # En postseason : pas de rank, afficher le bilan RS
+        if not is_postseason_png:
+            ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
                          ha="center", va="top", fontsize=11, color="#555555")
         else:
-            ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
+            ax_head.text(x_center, 0.20, wl,
                          ha="center", va="top", fontsize=11, color="#555555")
         if form:
             n = len(form)
@@ -867,8 +1266,23 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     draw_team_block(home_code, home_name, home_rank, home_wl, home_form, 0.17)
     draw_team_block(away_code, away_name, away_rank, away_wl, away_form, 0.83)
 
-    ax_head.text(0.5, 0.55, "VS", ha="center", va="center",
-                 fontsize=34, fontweight="bold")
+    # Centre : VS ou score de série si playoffs
+    if is_postseason_png and series_score and series_score.get("games_played", 0) > 0:
+        hw = series_score["home_wins"]
+        aw = series_score["away_wins"]
+        hw_col = EL_GREEN if hw > aw else (EL_RED if hw < aw else "#1a1a1a")
+        aw_col = EL_GREEN if aw > hw else (EL_RED if aw < hw else "#1a1a1a")
+        ax_head.text(0.5, 0.65, "Series", ha="center", va="center",
+                     fontsize=12, color="#555555")
+        ax_head.text(0.44, 0.48, str(hw), ha="center", va="center",
+                     fontsize=36, fontweight="bold", color=hw_col)
+        ax_head.text(0.5, 0.48, "-", ha="center", va="center",
+                     fontsize=28, color="#aaaaaa")
+        ax_head.text(0.56, 0.48, str(aw), ha="center", va="center",
+                     fontsize=36, fontweight="bold", color=aw_col)
+    else:
+        ax_head.text(0.5, 0.55, "VS", ha="center", va="center",
+                     fontsize=34, fontweight="bold")
 
     def draw_table(ax, title, h_stats, a_stats, home_name, away_name):
         ax.axis("off")
@@ -926,7 +1340,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
 
     ax_season = fig.add_subplot(gs[2, 0])
     draw_table(ax_season, "Season", h_season, a_season, home_name, away_name)
-
     ax_right = fig.add_subplot(gs[2, 1])
     draw_table(ax_right, right_label, h_right, a_right, home_name, away_name)
 
@@ -936,7 +1349,11 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_prob.set_ylim(0, 1)
 
     if show_prediction:
-        ax_prob.text(0.5, 0.9, "Win probability",
+        # Label adapte au round
+        prob_label = "Win probability" if round_ == "RS" else "Match edge"
+        if round_ == "FF":
+            prob_label += " (neutral court)"
+        ax_prob.text(0.5, 0.9, prob_label,
                      ha="center", va="center", fontsize=13, fontweight="bold")
         bar_y = 0.35
         bar_h = 0.3
@@ -950,10 +1367,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                      ha="left", va="top", fontsize=11, fontweight="bold")
         ax_prob.text(0.9, bar_y - 0.12, f"{away_prob*100:.1f}%  {away_name}",
                      ha="right", va="top", fontsize=11, fontweight="bold")
-    else:
-        ax_prob.text(0.5, 0.5, "Predictions disabled for playoffs",
-                     ha="center", va="center", fontsize=12,
-                     color="#888888", style="italic")
 
     ax_foot = fig.add_subplot(gs[4, :])
     ax_foot.axis("off")
@@ -1019,8 +1432,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     hcol, mcol, acol = st.columns([1, 2, 1])
     with hcol:
         render_team_header(hcode, home_disp, h_season, h_form,
-                           is_postseason=is_postseason,
-                           series_score=series, is_home=True)
+                           is_postseason=is_postseason)
     with mcol:
         vs_extra = ""
         if series and series["games_played"] > 0:
@@ -1044,19 +1456,18 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         )
     with acol:
         render_team_header(acode, away_disp, a_season, a_form,
-                           is_postseason=is_postseason,
-                           series_score=series, is_home=False)
+                           is_postseason=is_postseason)
 
     st.divider()
 
-    # Toggle switch Table / Radar
     toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
     if toggle_key not in st.session_state:
         st.session_state[toggle_key] = False
 
     tcol1, tcol2, tcol3 = st.columns([2, 1, 2])
     with tcol2:
-        use_radar = st.toggle("🕸️ Radar", key=toggle_key, value=st.session_state[toggle_key])
+        use_radar = st.toggle("🕸️ Radar", key=toggle_key,
+                              value=st.session_state[toggle_key])
 
     col1, col2 = st.columns(2)
     if use_radar:
@@ -1072,7 +1483,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             radar_png = build_radar_png(home_disp, away_disp, h_season, a_season, "Season")
             st.image(radar_png, use_container_width=True)
         with col2:
-            radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a, right_label_str)
+            radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a,
+                                         right_label_str)
             st.image(radar_png2, use_container_width=True)
     else:
         with col1:
@@ -1082,15 +1494,14 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             if played:
                 h_game = team_single_game_stats(all_games, home, int(rnd))
                 a_game = team_single_game_stats(all_games, away, int(rnd))
-                render_comparison_styled("This Game",
-                                         home_disp, away_disp,
+                render_comparison_styled("This Game", home_disp, away_disp,
                                          h_game, a_game)
             else:
                 render_comparison_styled(f"Last {ROLLING_WINDOW}",
                                          home_disp, away_disp,
                                          h_recent, a_recent)
 
-    # ─── Game Flow ─────────────────────────────────────────────────────────
+    # Game Flow
     if played:
         raw_gc = g["gamecode"]
         if isinstance(raw_gc, str) and "_" in raw_gc:
@@ -1104,34 +1515,27 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
                 st.image(gf_png, use_container_width=True)
 
-    pred = predict_home_win_pct(standings_scope, home, away,
-                                h_recent, a_recent)
-    st.markdown("**Win probability**")
-    if is_postseason:
-        st.markdown(
-            "<div style='text-align:center; padding:14px; "
-            "background:#f5f5f5; border-radius:6px; color:#666; "
-            "font-style:italic;'>"
-            "Predictions disabled for playoffs"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-    else:
-        pcol1, pcol2 = st.columns(2)
-        pcol1.metric(f"{home_disp} (Home)", f"{pred['home_prob']*100:.1f}%")
-        pcol2.metric(f"{away_disp} (Away)", f"{pred['away_prob']*100:.1f}%")
+    # -------------------------------------------------------------------------
+    # WIN PROBABILITY — Monte Carlo automatique
+    # -------------------------------------------------------------------------
+    st.divider()
 
-        with st.popover("How is this calculated?"):
-            st.markdown(
-                "The win probability blends several signals: each team's "
-                "season long efficiency profile, their recent form, the "
-                "current standings, and the home court factor. Each element "
-                "contributes to a weighted estimate, calibrated from "
-                "historical EuroLeague results."
-            )
+    raw_gc = g["gamecode"]
+    if isinstance(raw_gc, str) and "_" in raw_gc:
+        gc_num = int(raw_gc.split("_")[1])
+    else:
+        gc_num = int(raw_gc)
+
+    pred = predict_by_gamecode(gc_num)
+
+    if "error" in pred:
+        st.caption(f"Win probability unavailable: {pred['error']}")
+    else:
+        render_win_probability(pred, home_disp, away_disp, phase)
 
     st.divider()
 
+    # PNG Export
     png_key = f"png_{card_index}_{rnd}_{hcode}_{acode}"
     if png_key not in st.session_state:
         if st.button("📥 Generate downloadable image",
@@ -1145,24 +1549,24 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     h_right_data = h_recent
                     a_right_data = a_recent
                     right_lbl = f"Last {ROLLING_WINDOW}"
+
                 st.session_state[png_key] = build_preview_png(
                     home_code=hcode, home_name=home_disp,
                     home_rank=int(h_season["rank"]),
-                    home_wl=f"{int(h_season['wins'])}W "
-                            f"{int(h_season['losses'])}L",
+                    home_wl=f"{int(h_season['wins'])}W {int(h_season['losses'])}L",
                     home_form=h_form,
                     away_code=acode, away_name=away_disp,
                     away_rank=int(a_season["rank"]),
-                    away_wl=f"{int(a_season['wins'])}W "
-                            f"{int(a_season['losses'])}L",
+                    away_wl=f"{int(a_season['wins'])}W {int(a_season['losses'])}L",
                     away_form=a_form,
                     h_season=h_season, a_season=a_season,
                     h_right=h_right_data, a_right=a_right_data,
-                    home_prob=pred["home_prob"],
-                    away_prob=pred["away_prob"],
+                    home_prob=pred.get("home_prob", 0.5),
+                    away_prob=pred.get("away_prob", 0.5),
                     round_label=round_label_long,
-                    show_prediction=not is_postseason,
+                    show_prediction=True,
                     right_label=right_lbl,
+                    round_=phase,
                     series_score=series,
                 )
             st.rerun()
@@ -1337,10 +1741,6 @@ def main():
         unsafe_allow_html=True,
     )
 
-    if is_postseason:
-        st.info("📌 Predictions are disabled during the postseason because "
-                "the model is calibrated on regular season data.")
-
     for idx, g in games.iterrows():
         home, away = g["hometeam"], g["awayteam"]
         hcode, acode = g["homecode"], g["awaycode"]
@@ -1417,30 +1817,29 @@ def main():
         st.markdown("""
 *Section 1* : **Efficiency Ratings**
 
-**ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better. A top-tier EuroLeague offense typically runs between 115 and 122.
-**DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better. A top-tier EuroLeague defense typically runs between 105 and 112.
-**NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better. A NETRTG above +5 usually indicates a playoff-caliber team.
+**ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better.
+**DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better.
+**NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better.
 
 *Section 2* : **Shooting and Ball Control**
 
-**eFG% (Effective Field Goal Percentage)** : Shooting efficiency that accounts for the extra value of three-pointers. Formula: (2PM + 1.5 × 3PM) / FGA. Higher is better. Top EuroLeague teams sit around 55% eFG.
-**TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better. A disciplined team stays below 13% TOV.
-**AST% (Assist Percentage)** : Share of made field goals created from an assist. Higher is better. Teams with strong ball movement exceed 65% AST.
+**eFG% (Effective Field Goal Percentage)** : Shooting efficiency accounting for three-pointers.
+**TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better.
+**AST% (Assist Percentage)** : Share of made field goals assisted. Higher is better.
 
 *Section 3* : **Rebounding**
 
-**OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed by the team. Higher is better. Elite offensive rebounding teams reach 32% and above.
-**REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed by the team. Higher is better. A balanced team sits around 50%.
+**OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed.
+**REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed.
 
-*Section 4* : **How to read the tables**
+*Section 4* : **Win Probability**
 
-The comparison tables show two teams side by side across the same 8 metrics. For each row, both values are color-coded based on which team leads in that area:
-
-**Green** means this team has the advantage. The more intense the green, the bigger the advantage.
-**Red** means this team trails. The more intense the red, the bigger the gap.
-**White** means the two teams are essentially equal on this metric.
-
-The right-hand table switches automatically: for upcoming games it shows each team's last 5 games average, for played games it shows the actual game stats compared against each team's season average.
+The model uses Monte Carlo simulation (10,000 iterations) combining four signals:
+current season performance, head-to-head history (last 4 seasons), home court advantage,
+and offensive/defensive style matchup. During playoffs, the model also integrates
+the current series context — the weight of games already played in the series increases
+with each game (G1=20%, G2=35%, G3=45%). For the Final Four, home court advantage
+is removed as games are played on neutral court.
     """)
 
     with st.expander("ℹ️ About ELSTATSLAB Match Center"):
@@ -1449,16 +1848,7 @@ The right-hand table switches automatically: for upcoming games it shows each te
             **ELSTATSLAB Match Center** is an independent EuroLeague analytics
             tool that lets you compare any matchup of the season at a glance.
 
-            For each game you can explore:
-            - Both teams' season long efficiency profile (ORTG, DRTG, NETRTG, REB%, AST%)
-            - Their form over the last 5 games
-            - Standings, win-loss record and recent results
-            - A win probability estimate during the regular season
-
-            Built and maintained by **[@EL_Statslab](https://twitter.com/EL_Statslab)**,
-            an independent EuroLeague analytics project sharing daily insights
-            on X. Follow for player and team breakdowns, advanced metrics,
-            and matchday previews.
+            Built and maintained by **[@EL_Statslab](https://twitter.com/EL_Statslab)**.
 
             *Data sourced from official EuroLeague feeds. All numbers are
             calculated independently.*
