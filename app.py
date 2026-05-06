@@ -1251,7 +1251,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                      fontsize=14, fontweight="bold")
         # En postseason : pas de rank, afficher le bilan RS
         if not is_postseason_png:
-            ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
+            ax_head.text(x_center, 0.20, f"#{wl}",
                          ha="center", va="top", fontsize=11, color="#555555")
         else:
             ax_head.text(x_center, 0.20, wl,
@@ -1444,20 +1444,23 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         render_team_header(hcode, home_disp, h_season, h_form,
                            is_postseason=is_postseason)
     with mcol:
-        vs_extra = ""
-        if series and series["games_played"] > 0:
-            hw, aw = series["home_wins"], series["away_wins"]
-            hw_col = "#2ea043" if hw > aw else ("#da3633" if hw < aw else "#1a1a1a")
-            aw_col = "#2ea043" if aw > hw else ("#da3633" if aw < hw else "#1a1a1a")
-            vs_extra = (
-                f"<div style='margin-top:8px;font-size:0.85rem;color:#555;"
-                f"font-weight:500;'>Series</div>"
-                f"<div style='font-size:1.3rem;font-weight:bold;letter-spacing:3px;'>"
-                f"<span style='color:{hw_col};'>{hw}</span>"
-                f"<span style='color:#aaa;margin:0 6px;'>-</span>"
-                f"<span style='color:{aw_col};'>{aw}</span>"
-                f"</div>"
-            )
+            vs_extra = ""
+            if series and series["games_played"] > 0:
+                if series["home_code"] == hcode.upper():
+                    hw, aw = series["home_wins"], series["away_wins"]
+                else:
+                    hw, aw = series["away_wins"], series["home_wins"]
+                hw_col = "#2ea043" if hw > aw else ("#da3633" if hw < aw else "#1a1a1a")
+                aw_col = "#2ea043" if aw > hw else ("#da3633" if aw < hw else "#1a1a1a")
+                vs_extra = (
+                    f"<div style='margin-top:8px;font-size:0.85rem;color:#555;"
+                    f"font-weight:500;'>Series</div>"
+                    f"<div style='font-size:1.3rem;font-weight:bold;letter-spacing:3px;'>"
+                    f"<span style='color:{hw_col};'>{hw}</span>"
+                    f"<span style='color:#aaa;margin:0 6px;'>-</span>"
+                    f"<span style='color:{aw_col};'>{aw}</span>"
+                    f"</div>"
+                )
         st.markdown(
             "<div style='text-align:center; padding-top:40px;"
             f"font-size:24px; font-weight:bold;'>VS</div>"
