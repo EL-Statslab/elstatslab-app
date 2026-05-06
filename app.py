@@ -1760,12 +1760,22 @@ def main():
         else:
             date_str = None
 
-        is_playoffs_phase = phase == "PO"
+       is_playoffs_phase = phase == "PO"
         series = None
         if is_playoffs_phase and not playoffs_schedule.empty:
-            series = get_series_score(playoffs_schedule, all_games,
-                                      hcode, acode, int(rnd))
-
+            raw_series = get_series_score(playoffs_schedule, all_games,
+                                          hcode, acode, int(rnd))
+            if raw_series:
+                if raw_series["home_code"] == hcode.upper():
+                    series = raw_series
+                else:
+                    series = {
+                        "home_code": hcode.upper(),
+                        "away_code": acode.upper(),
+                        "home_wins": raw_series["away_wins"],
+                        "away_wins": raw_series["home_wins"],
+                        "games_played": raw_series["games_played"],
+                    }
         with st.container(border=True):
             render_match_card(
                 hcode, acode, home_disp, away_disp,
