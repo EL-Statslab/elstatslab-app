@@ -240,6 +240,21 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
     }
 
 
+def orient_series(raw_series: dict | None, hcode: str) -> dict | None:
+    """Reoriente le score de serie selon qui recoit le match en cours."""
+    if not raw_series:
+        return None
+    if raw_series["home_code"] == hcode.upper():
+        return raw_series
+    return {
+        "home_code": hcode.upper(),
+        "away_code": raw_series["home_code"],
+        "home_wins": raw_series["away_wins"],
+        "away_wins": raw_series["home_wins"],
+        "games_played": raw_series["games_played"],
+    }
+
+
 @st.cache_data(ttl=600)
 def load_matchday(season: int, gameday: int) -> pd.DataFrame:
     q = """
@@ -581,6 +596,7 @@ def _serie_prob_weight(serie_scores: list) -> tuple:
     prob = _mc_logistic(weighted_margin / 15.0)
     weight_map = {1: 0.20, 2: 0.35, 3: 0.45, 4: 0.50, 5: 0.55}
     return prob, weight_map.get(n, 0.55)
+
 
 def _get_match_context(conn, gamecode: int) -> Optional[dict]:
     row = conn.execute("""
@@ -1035,20 +1051,8 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
     )
     st.markdown(bar_html, unsafe_allow_html=True)
 
-    ci_low    = pred.get("confidence_low", hp)
-    ci_high   = pred.get("confidence_high", hp)
-    h2h_games = pred.get("h2h_games", 0)
+    h2h_games  = pred.get("h2h_games", 0)
     h2h_margin = pred.get("h2h_margin", 0.0)
-
-    if h2h_games > 0:
-        margin_leader = home_disp if h2h_margin >= 0 else away_disp
-        margin_abs = abs(h2h_margin)
-        h2h_text = (
-            f" · {h2h_games} head-to-head games over the last 4 seasons, "
-            f"avg margin {margin_abs:.1f} pts in favor of {margin_leader}"
-        )
-    else:
-        h2h_text = " · No head-to-head history available"
 
     st.caption(f"Based on {MC_N_SIMULATIONS:,} simulations")
 
@@ -1221,8 +1225,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
-        # FIX 1 : en saison reguliere afficher le bilan sans #rank
-        # en postseason ne rien afficher (le score serie est dans le bloc central)
         if not is_postseason_png:
             ax_head.text(x_center, 0.20, wl,
                          ha="center", va="top", fontsize=11, color="#555555")
@@ -1246,7 +1248,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     draw_team_block(home_code, home_name, home_rank, home_wl, home_form, 0.17)
     draw_team_block(away_code, away_name, away_rank, away_wl, away_form, 0.83)
 
-    # FIX 2 : centre — VS ou score de serie oriente selon le match en cours
     if is_postseason_png and series_score and series_score.get("games_played", 0) > 0:
         if series_score.get("home_code", "").upper() == home_code.upper():
             hw = series_score["home_wins"]
@@ -1410,7 +1411,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     series = None
     if is_playoffs and playoffs_schedule is not None:
-        series = get_series_score(playoffs_schedule, all_games, hcode, acode, int(rnd))
+        raw = get_series_score(playoffs_schedule, all_games, hcode, acode, int(rnd))
+        series = orient_series(raw, hcode)
 
     hcol, mcol, acol = st.columns([1, 2, 1])
     with hcol:
@@ -1419,11 +1421,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     with mcol:
         vs_extra = ""
         if series and series["games_played"] > 0:
-            # FIX 3 : orienter selon qui recoit le match en cours
-            if series["home_code"] == hcode.upper():
-                hw, aw = series["home_wins"], series["away_wins"]
-            else:
-                hw, aw = series["away_wins"], series["home_wins"]
+            hw = series["home_wins"]
+            aw = series["away_wins"]
             hw_col = "#2ea043" if hw > aw else ("#da3633" if hw < aw else "#1a1a1a")
             aw_col = "#2ea043" if aw > hw else ("#da3633" if aw < hw else "#1a1a1a")
             vs_extra = (
@@ -1488,7 +1487,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                                          home_disp, away_disp,
                                          h_recent, a_recent)
 
-    # Game Flow
     if played:
         raw_gc = g["gamecode"]
         if isinstance(raw_gc, str) and "_" in raw_gc:
@@ -1519,7 +1517,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     st.divider()
 
-    # PNG Export
     png_key = f"png_{card_index}_{rnd}_{hcode}_{acode}"
     if png_key not in st.session_state:
         if st.button("📥 Generate downloadable image",
@@ -1760,22 +1757,11 @@ def main():
         else:
             date_str = None
 
-       is_playoffs_phase = phase == "PO"
         series = None
-        if is_playoffs_phase and not playoffs_schedule.empty:
-            raw_series = get_series_score(playoffs_schedule, all_games,
-                                          hcode, acode, int(rnd))
-            if raw_series:
-                if raw_series["home_code"] == hcode.upper():
-                    series = raw_series
-                else:
-                    series = {
-                        "home_code": hcode.upper(),
-                        "away_code": acode.upper(),
-                        "home_wins": raw_series["away_wins"],
-                        "away_wins": raw_series["home_wins"],
-                        "games_played": raw_series["games_played"],
-                    }
+        if phase == "PO" and not playoffs_schedule.empty:
+            raw = get_series_score(playoffs_schedule, all_games, hcode, acode, int(rnd))
+            series = orient_series(raw, hcode)
+
         with st.container(border=True):
             render_match_card(
                 hcode, acode, home_disp, away_disp,
