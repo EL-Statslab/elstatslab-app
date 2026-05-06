@@ -445,8 +445,8 @@ TEAM_NAME_MAP = {
 MC_MIN_H2H_GAMES  = 4
 MC_MIN_DIST_GAMES = 2
 MC_N_SIMULATIONS  = 10_000
-MC_HOME_COURT    = 0.06   # Regular Season
-MC_HOME_COURT_PO = 0.10   # Playoffs — domicile plus decisif
+MC_HOME_COURT    = 0.06
+MC_HOME_COURT_PO = 0.10
 
 WEIGHTS_RS = {
     "current_season": 0.50,
@@ -572,24 +572,17 @@ def _get_win_pct(conn, team_name: str, season: int) -> float:
 def _serie_prob_weight(serie_scores: list) -> tuple:
     if not serie_scores:
         return 0.5, 0.0
-    
+
     n = len(serie_scores)
-    
-    # Poids exponentiels : le match le plus recent compte double le precedent
     weights = [2 ** i for i in range(n)]
     total_w = sum(weights)
     weighted_margin = sum(s * w for s, w in zip(serie_scores, weights)) / total_w
-    
+
     prob = _mc_logistic(weighted_margin / 15.0)
     weight_map = {1: 0.20, 2: 0.35, 3: 0.45, 4: 0.50, 5: 0.55}
     return prob, weight_map.get(n, 0.55)
 
 def _get_match_context(conn, gamecode: int) -> Optional[dict]:
-    """
-    Recupere automatiquement depuis la DB tout le contexte
-    necessaire pour calculer la win probability d'un match.
-    Detecte le round et adapte le modele en consequence.
-    """
     row = conn.execute("""
         SELECT Season, round, hometeam, awayteam, homecode, awaycode
         FROM schedule
@@ -659,14 +652,6 @@ def _get_match_context(conn, gamecode: int) -> Optional[dict]:
 
 
 def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
-    """
-    Calcule la win probability pour le prochain match.
-    S'adapte automatiquement selon le round detecte :
-      RS  : 4 composantes, home court actif
-      PI  : playoffs sans serie precedente, home court actif
-      PO  : playoffs avec dynamique de serie, home court actif
-      FF  : terrain neutre, home court desactive, pas de serie
-    """
     home_team    = ctx["home_team"]
     away_team    = ctx["away_team"]
     season       = ctx["season"]
@@ -676,7 +661,6 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
     away_win_pct = ctx["away_win_pct"]
     serie_scores = ctx["serie_scores"]
 
-    # --- Distributions de performance ---
     if is_playoff:
         home_dist = _get_dist(conn, home_team, season, "PO", seasons_back=4)
         away_dist = _get_dist(conn, away_team, season, "PO", seasons_back=4)
@@ -696,7 +680,6 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
         return {"home_prob": 0.5, "away_prob": 0.5,
                 "error": "Distributions introuvables"}
 
-    # --- Monte Carlo ---
     rng = np.random.default_rng()
     h_scores = rng.normal(home_dist["avg_pts"], home_dist["std_pts"], MC_N_SIMULATIONS)
     a_scores = rng.normal(away_dist["avg_pts"], away_dist["std_pts"], MC_N_SIMULATIONS)
@@ -705,7 +688,6 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
     ci_low   = max(0.02, mc_prob - 1.645 * std_err)
     ci_high  = min(0.98, mc_prob + 1.645 * std_err)
 
-    # --- H2H ---
     h2h = _get_h2h(conn, home_team, away_team, season, playoff_only=is_playoff)
     if h2h["games"] < MC_MIN_H2H_GAMES and is_playoff:
         h2h = _get_h2h(conn, home_team, away_team, season, playoff_only=False)
@@ -716,7 +698,6 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
         raw_h2h     = _mc_logistic(h2h["avg_margin"] / 15.0)
         h2h_prob    = 0.5 + reliability * (raw_h2h - 0.5)
 
-# --- Home court : desactive en Final Four (terrain neutre) ---
     if round_ == "FF":
         home_court_prob = 0.5
     elif round_ in ("PO", "PI"):
@@ -724,16 +705,13 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
     else:
         home_court_prob = 0.5 + MC_HOME_COURT
 
-    # --- Style matchup ---
     home_net   = home_dist["avg_ortg"] - away_dist["avg_drtg"]
     away_net   = away_dist["avg_ortg"] - home_dist["avg_drtg"]
     style_prob = _mc_logistic((home_net - away_net) / 40.0)
 
-    # --- Saison en cours ---
     season_prob         = _mc_logistic(home_win_pct - away_win_pct)
     current_season_prob = 0.6 * mc_prob + 0.4 * season_prob
 
-    # --- Regular Season : 4 composantes fixes ---
     if not is_playoff:
         components = {
             "current_season": round(current_season_prob, 3),
@@ -757,7 +735,6 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
             "round":           round_,
         }
 
-    # --- Playoffs / Play-In / Final Four : dynamique de serie ---
     serie_prob, serie_weight = _serie_prob_weight(serie_scores)
     remaining = 1.0 - serie_weight
     base_w    = {k: v * remaining for k, v in WEIGHTS_PO_BASE.items()}
@@ -791,7 +768,6 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
 
 @st.cache_data(ttl=300)
 def predict_by_gamecode(gamecode: int) -> dict:
-    """Point d'entree principal : gamecode → prediction complete."""
     conn = get_conn()
     ctx = _get_match_context(conn, gamecode)
     if not ctx:
@@ -1033,7 +1009,6 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
     hp = pred["home_prob"]
     ap = pred["away_prob"]
 
-    # Contextual label
     if round_ == "FF":
         section_label = "Match edge (Final Four · neutral court)"
     elif round_ == "PO":
@@ -1045,7 +1020,6 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
 
     st.markdown(f"**{section_label}**")
 
-    # Probability bar
     bar_html = (
         "<div style='margin:12px 0 6px 0;'>"
         "<div style='display:flex;height:28px;border-radius:4px;overflow:hidden;'>"
@@ -1061,7 +1035,6 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
     )
     st.markdown(bar_html, unsafe_allow_html=True)
 
-    # Confidence interval and H2H context
     ci_low    = pred.get("confidence_low", hp)
     ci_high   = pred.get("confidence_high", hp)
     h2h_games = pred.get("h2h_games", 0)
@@ -1079,7 +1052,6 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
 
     st.caption(f"Based on {MC_N_SIMULATIONS:,} simulations")
 
-    # Explanatory popover — generic, no weights revealed
     with st.popover("How is this calculated?"):
         if round_ == "RS":
             st.markdown(
@@ -1249,11 +1221,9 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
-        # En postseason : pas de rank, afficher le bilan RS
+        # FIX 1 : en saison reguliere afficher le bilan sans #rank
+        # en postseason ne rien afficher (le score serie est dans le bloc central)
         if not is_postseason_png:
-            ax_head.text(x_center, 0.20, f"#{wl}",
-                         ha="center", va="top", fontsize=11, color="#555555")
-        else:
             ax_head.text(x_center, 0.20, wl,
                          ha="center", va="top", fontsize=11, color="#555555")
         if form:
@@ -1276,10 +1246,14 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     draw_team_block(home_code, home_name, home_rank, home_wl, home_form, 0.17)
     draw_team_block(away_code, away_name, away_rank, away_wl, away_form, 0.83)
 
-    # Centre : VS ou score de série si playoffs
+    # FIX 2 : centre — VS ou score de serie oriente selon le match en cours
     if is_postseason_png and series_score and series_score.get("games_played", 0) > 0:
-        hw = series_score["home_wins"]
-        aw = series_score["away_wins"]
+        if series_score.get("home_code", "").upper() == home_code.upper():
+            hw = series_score["home_wins"]
+            aw = series_score["away_wins"]
+        else:
+            hw = series_score["away_wins"]
+            aw = series_score["home_wins"]
         hw_col = EL_GREEN if hw > aw else (EL_RED if hw < aw else "#1a1a1a")
         aw_col = EL_GREEN if aw > hw else (EL_RED if aw < hw else "#1a1a1a")
         ax_head.text(0.5, 0.65, "Series", ha="center", va="center",
@@ -1359,7 +1333,6 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_prob.set_ylim(0, 1)
 
     if show_prediction:
-        # Label adapte au round
         prob_label = "Win probability" if round_ == "RS" else "Match edge"
         if round_ == "FF":
             prob_label += " (neutral court)"
@@ -1444,23 +1417,24 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         render_team_header(hcode, home_disp, h_season, h_form,
                            is_postseason=is_postseason)
     with mcol:
-            vs_extra = ""
-            if series and series["games_played"] > 0:
-                if series["home_code"] == hcode.upper():
-                    hw, aw = series["home_wins"], series["away_wins"]
-                else:
-                    hw, aw = series["away_wins"], series["home_wins"]
-                hw_col = "#2ea043" if hw > aw else ("#da3633" if hw < aw else "#1a1a1a")
-                aw_col = "#2ea043" if aw > hw else ("#da3633" if aw < hw else "#1a1a1a")
-                vs_extra = (
-                    f"<div style='margin-top:8px;font-size:0.85rem;color:#555;"
-                    f"font-weight:500;'>Series</div>"
-                    f"<div style='font-size:1.3rem;font-weight:bold;letter-spacing:3px;'>"
-                    f"<span style='color:{hw_col};'>{hw}</span>"
-                    f"<span style='color:#aaa;margin:0 6px;'>-</span>"
-                    f"<span style='color:{aw_col};'>{aw}</span>"
-                    f"</div>"
-                )
+        vs_extra = ""
+        if series and series["games_played"] > 0:
+            # FIX 3 : orienter selon qui recoit le match en cours
+            if series["home_code"] == hcode.upper():
+                hw, aw = series["home_wins"], series["away_wins"]
+            else:
+                hw, aw = series["away_wins"], series["home_wins"]
+            hw_col = "#2ea043" if hw > aw else ("#da3633" if hw < aw else "#1a1a1a")
+            aw_col = "#2ea043" if aw > hw else ("#da3633" if aw < hw else "#1a1a1a")
+            vs_extra = (
+                f"<div style='margin-top:8px;font-size:0.85rem;color:#555;"
+                f"font-weight:500;'>Series</div>"
+                f"<div style='font-size:1.3rem;font-weight:bold;letter-spacing:3px;'>"
+                f"<span style='color:{hw_col};'>{hw}</span>"
+                f"<span style='color:#aaa;margin:0 6px;'>-</span>"
+                f"<span style='color:{aw_col};'>{aw}</span>"
+                f"</div>"
+            )
         st.markdown(
             "<div style='text-align:center; padding-top:40px;"
             f"font-size:24px; font-weight:bold;'>VS</div>"
@@ -1528,9 +1502,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
                 st.image(gf_png, use_container_width=True)
 
-    # -------------------------------------------------------------------------
-    # WIN PROBABILITY — Monte Carlo automatique
-    # -------------------------------------------------------------------------
     st.divider()
 
     raw_gc = g["gamecode"]
