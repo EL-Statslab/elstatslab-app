@@ -1510,12 +1510,13 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     pred = predict_by_gamecode(gc_num)
 
-    if "error" in pred:
-        st.caption(f"Win probability unavailable: {pred['error']}")
-    else:
-        render_win_probability(pred, home_disp, away_disp, phase)
+    if not played:
+        if "error" in pred:
+            st.caption(f"Win probability unavailable: {pred['error']}")
+        else:
+            render_win_probability(pred, home_disp, away_disp, phase)
 
-    st.divider()
+        st.divider()
 
     png_key = f"png_{card_index}_{rnd}_{hcode}_{acode}"
     if png_key not in st.session_state:
@@ -1545,7 +1546,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     home_prob=pred.get("home_prob", 0.5),
                     away_prob=pred.get("away_prob", 0.5),
                     round_label=round_label_long,
-                    show_prediction=True,
+                    show_prediction=not played,
                     right_label=right_lbl,
                     round_=phase,
                     series_score=series,
