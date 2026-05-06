@@ -232,10 +232,10 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
             away_wins += 1
 
     return {
-        "home_code":    hcode.upper(),   # equipe home du match actuel
-        "away_code":    acode.upper(),   # equipe away du match actuel
-        "home_wins":    home_wins if series_home_code == hcode.upper() else away_wins,
-        "away_wins":    away_wins if series_home_code == hcode.upper() else home_wins,
+        "home_code": series_home_code,
+        "away_code": series_away_code,
+        "home_wins": home_wins,
+        "away_wins": away_wins,
         "games_played": games_played,
     }
 
@@ -445,7 +445,8 @@ TEAM_NAME_MAP = {
 MC_MIN_H2H_GAMES  = 4
 MC_MIN_DIST_GAMES = 2
 MC_N_SIMULATIONS  = 10_000
-MC_HOME_COURT     = 0.06
+MC_HOME_COURT    = 0.06   # Regular Season
+MC_HOME_COURT_PO = 0.10   # Playoffs — domicile plus decisif
 
 WEIGHTS_RS = {
     "current_season": 0.50,
@@ -456,7 +457,7 @@ WEIGHTS_RS = {
 WEIGHTS_PO_BASE = {
     "current_season": 0.35,
     "h2h":            0.30,
-    "home_court":     0.10,
+    "home_court":     0.20,
     "style_matchup":  0.25,
 }
 
@@ -568,16 +569,20 @@ def _get_win_pct(conn, team_name: str, season: int) -> float:
     return 0.5
 
 
-def _serie_prob_weight(serie_scores: list) -> tuple[float, float]:
-    """Probabilite et poids bases sur les matchs deja joues dans la serie."""
+def _serie_prob_weight(serie_scores: list) -> tuple:
     if not serie_scores:
         return 0.5, 0.0
+    
     n = len(serie_scores)
-    avg = sum(serie_scores) / n
-    prob = _mc_logistic(avg / 15.0)
+    
+    # Poids exponentiels : le match le plus recent compte double le precedent
+    weights = [2 ** i for i in range(n)]
+    total_w = sum(weights)
+    weighted_margin = sum(s * w for s, w in zip(serie_scores, weights)) / total_w
+    
+    prob = _mc_logistic(weighted_margin / 15.0)
     weight_map = {1: 0.20, 2: 0.35, 3: 0.45, 4: 0.50, 5: 0.55}
     return prob, weight_map.get(n, 0.55)
-
 
 def _get_match_context(conn, gamecode: int) -> Optional[dict]:
     """
@@ -711,8 +716,13 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
         raw_h2h     = _mc_logistic(h2h["avg_margin"] / 15.0)
         h2h_prob    = 0.5 + reliability * (raw_h2h - 0.5)
 
-    # --- Home court : desactive en Final Four (terrain neutre) ---
-    home_court_prob = 0.5 if round_ == "FF" else (0.5 + MC_HOME_COURT)
+# --- Home court : desactive en Final Four (terrain neutre) ---
+    if round_ == "FF":
+        home_court_prob = 0.5
+    elif round_ in ("PO", "PI"):
+        home_court_prob = 0.5 + MC_HOME_COURT_PO
+    else:
+        home_court_prob = 0.5 + MC_HOME_COURT
 
     # --- Style matchup ---
     home_net   = home_dist["avg_ortg"] - away_dist["avg_drtg"]
@@ -1553,11 +1563,11 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                 st.session_state[png_key] = build_preview_png(
                     home_code=hcode, home_name=home_disp,
                     home_rank=int(h_season["rank"]),
-                    home_wl=f"{int(h_season['wins'])}W {int(h_season['losses'])}L" if not is_postseason else "",
+                    home_wl=f"{int(h_season['wins'])}W {int(h_season['losses'])}L",
                     home_form=h_form,
                     away_code=acode, away_name=away_disp,
                     away_rank=int(a_season["rank"]),
-                    away_wl=f"{int(a_season['wins'])}W {int(a_season['losses'])}L" if not is_postseason else "",
+                    away_wl=f"{int(a_season['wins'])}W {int(a_season['losses'])}L",
                     away_form=a_form,
                     h_season=h_season, a_season=a_season,
                     h_right=h_right_data, a_right=a_right_data,
