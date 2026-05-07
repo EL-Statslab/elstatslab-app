@@ -9,12 +9,14 @@ Run locally:
 
 import base64
 import io
+import json
 import math
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -241,7 +243,6 @@ def get_series_score(playoffs_schedule: pd.DataFrame,
 
 
 def orient_series(raw_series: dict | None, hcode: str) -> dict | None:
-    """Reoriente le score de serie selon qui recoit le match en cours."""
     if not raw_series:
         return None
     if raw_series["home_code"] == hcode.upper():
@@ -1051,9 +1052,6 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
     )
     st.markdown(bar_html, unsafe_allow_html=True)
 
-    h2h_games  = pred.get("h2h_games", 0)
-    h2h_margin = pred.get("h2h_margin", 0.0)
-
     st.caption(f"Based on {MC_N_SIMULATIONS:,} simulations")
 
     with st.popover("How is this calculated?"):
@@ -1368,6 +1366,409 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
 
 
 # =============================================================================
+# IMPACT PULSE
+# =============================================================================
+
+IP_METRICS_DISPLAY = ["ORTG", "DRTG", "NETRTG", "OREB%", "REB%", "AST%", "eFG%", "TOV%"]
+IP_LOWER_IS_BETTER = {"DRTG", "TOV%"}
+
+IP_METRIC_COLS = {
+    "ORTG":   ("on_ortg",  "off_ortg"),
+    "DRTG":   ("on_drtg",  "off_drtg"),
+    "NETRTG": ("on_netrtg","off_netrtg"),
+    "OREB%":  ("on_oreb",  "off_oreb"),
+    "REB%":   ("on_reb",   "off_reb"),
+    "AST%":   ("on_ast",   "off_ast"),
+    "eFG%":   ("on_efg",   "off_efg"),
+    "TOV%":   ("on_tov",   "off_tov"),
+}
+
+
+@st.cache_data(ttl=600)
+def load_impact_pulse(gamecode: int, season: int) -> pd.DataFrame:
+    try:
+        q = """
+            SELECT * FROM impact_pulse
+            WHERE season = ? AND gamecode = ?
+        """
+        return pd.read_sql(q, get_conn(), params=(season, gamecode))
+    except Exception:
+        return pd.DataFrame()
+
+
+def _ip_delta_bg(metric: str, delta: float) -> str:
+    """Couleur de fond pour une cellule delta On/Off."""
+    if metric in IP_LOWER_IS_BETTER:
+        good = delta <= -0.3
+        bad  = delta >= 0.3
+    else:
+        good = delta >= 0.3
+        bad  = delta <= -0.3
+
+    if good:
+        return "rgba(46,160,67,0.22)"
+    if bad:
+        return "rgba(218,54,51,0.22)"
+    return "#f5f5f5"
+
+
+def render_impact_pulse_section(gamecode: int, season: int,
+                                home_code: str, away_code: str,
+                                home_disp: str, away_disp: str,
+                                round_label: str,
+                                card_index: int):
+    """Affiche la section Impact Pulse dans un st.expander."""
+
+    ip_df = load_impact_pulse(gamecode, season)
+
+    with st.expander("⚡ Impact Pulse — Who moved the needle?"):
+        if ip_df.empty:
+            st.info("No Impact Pulse data available for this game.")
+            return
+
+        st.caption(
+            "Impact Score — proprietary On/Off composite metric. "
+            "Identifies the player who moved the needle most for his team within this game, "
+            "across key efficiency metrics."
+        )
+
+        col_h, col_a = st.columns(2)
+
+        for col, code, disp in [
+            (col_h, home_code, home_disp),
+            (col_a, away_code, away_disp),
+        ]:
+            row = ip_df[ip_df["team_code"].str.upper() == code.upper()]
+            if row.empty:
+                with col:
+                    st.info(f"No data for {disp}")
+                continue
+
+            r = row.iloc[0]
+            score = r["impact_score"]
+            score_str = f"{score:+.2f}"
+            score_color = "#2ea043" if score >= 0 else "#da3633"
+
+            with col:
+                # Card joueur
+                st.markdown(
+                    f"<div style='background:#ffffff;border:1px solid #e0e0e0;"
+                    f"border-radius:10px;padding:14px 16px 10px 16px;margin-bottom:10px;'>"
+                    f"<div style='font-size:0.65rem;letter-spacing:0.14em;color:#888888;"
+                    f"text-transform:uppercase;font-weight:600;'>{disp}</div>"
+                    f"<div style='font-size:1.35rem;font-weight:700;color:#1a1a1a;margin-top:2px;'>"
+                    f"{r['player_name']}</div>"
+                    f"<div style='margin-top:6px;'>"
+                    f"<span style='background:#fff8e1;border:1px solid #f9a825;"
+                    f"color:#f57f17;font-size:0.6rem;font-weight:700;letter-spacing:0.1em;"
+                    f"padding:2px 8px;border-radius:20px;text-transform:uppercase;'>"
+                    f"Difference Maker</span>"
+                    f"&nbsp;"
+                    f"<span style='background:#e8f5e9;border:1px solid #2ea043;"
+                    f"color:#2e7d32;font-size:0.6rem;font-weight:700;letter-spacing:0.1em;"
+                    f"padding:2px 8px;border-radius:20px;'>"
+                    f"Score {score_str}</span>"
+                    f"</div>"
+                    f"<div style='font-size:0.65rem;color:#aaaaaa;margin-top:6px;'>"
+                    f"{int(r['on_poss'])} poss ON · min. threshold 12 poss</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # Tableau ON/OFF
+                def _ip_delta_color(metric, delta):
+                    if metric in IP_LOWER_IS_BETTER:
+                        good = delta <= -0.3
+                        bad  = delta >= 0.3
+                    else:
+                        good = delta >= 0.3
+                        bad  = delta <= -0.3
+                    if good:
+                        return "color:#2e7d32;font-weight:bold;"
+                    if bad:
+                        return "color:#c62828;font-weight:bold;"
+                    return "color:#888;"
+
+                rows_html = ""
+                for m in IP_METRICS_DISPLAY:
+                    on_col, off_col = IP_METRIC_COLS[m]
+                    on_val  = r[on_col]
+                    off_val = r[off_col]
+                    delta   = on_val - off_val
+                    delta_str = f"{delta:+.1f}"
+                    bg = _ip_delta_bg(m, delta)
+                    dcol = _ip_delta_color(m, delta)
+                    rows_html += (
+                        f"<tr>"
+                        f"<td style='padding:6px 8px;background:{bg};font-weight:bold;"
+                        f"text-align:center;border-bottom:1px solid #eee;'>{on_val:.1f}</td>"
+                        f"<td style='padding:6px 8px;background:#f5f5f5;text-align:center;"
+                        f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
+                        f"<td style='padding:6px 8px;text-align:center;"
+                        f"border-bottom:1px solid #eee;color:#777;'>{off_val:.1f}</td>"
+                        f"<td style='padding:6px 8px;text-align:center;"
+                        f"border-bottom:1px solid #eee;{dcol}'>{delta_str}</td>"
+                        f"</tr>"
+                    )
+
+                table_html = (
+                    "<div style='width:100%;overflow-x:auto;'>"
+                    "<table style='width:100%;border-collapse:collapse;"
+                    "font-family:sans-serif;font-size:0.88rem;'>"
+                    "<thead><tr>"
+                    "<th style='padding:6px 4px;text-align:center;color:#666;"
+                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>ON</th>"
+                    "<th style='padding:6px 4px;text-align:center;color:#666;"
+                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>Metric</th>"
+                    "<th style='padding:6px 4px;text-align:center;color:#666;"
+                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>OFF</th>"
+                    "<th style='padding:6px 4px;text-align:center;color:#666;"
+                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>Δ</th>"
+                    "</tr></thead>"
+                    f"<tbody>{rows_html}</tbody>"
+                    "</table></div>"
+                )
+                st.markdown(table_html, unsafe_allow_html=True)
+
+                # Full ranking dans un expander imbriqué
+                if r.get("full_ranking"):
+                    try:
+                        ranking = json.loads(r["full_ranking"])
+                        with st.expander(f"Full ranking — {code}"):
+                            rank_rows = []
+                            for i, p in enumerate(ranking, 1):
+                                net_on  = p.get("on_netrtg", 0)
+                                net_off = p.get("off_netrtg", 0)
+                                delta   = net_on - net_off
+                                rank_rows.append({
+                                    "#":           i,
+                                    "Player":      p["name"],
+                                    "Score":       f"{p['score']:+.2f}",
+                                    "NETRTG ON":   net_on,
+                                    "NETRTG OFF":  net_off,
+                                    "Δ NETRTG":    f"{delta:+.1f}",
+                                    "Poss ON":     p.get("on_poss", 0),
+                                })
+                            st.dataframe(
+                                pd.DataFrame(rank_rows),
+                                hide_index=True,
+                                use_container_width=True,
+                            )
+                    except Exception:
+                        pass
+
+        # ── Export PNG ────────────────────────────────────────────────────
+        st.divider()
+        png_key = f"ip_png_{card_index}_{gamecode}"
+        if png_key not in st.session_state:
+            if st.button(
+                "📥 Generate Impact Pulse image",
+                key=f"ip_btn_{card_index}_{gamecode}",
+            ):
+                with st.spinner("Generating Impact Pulse image..."):
+                    st.session_state[png_key] = build_impact_pulse_png(
+                        ip_df, home_code, away_code,
+                        home_disp, away_disp, round_label,
+                    )
+                st.rerun()
+
+        if png_key in st.session_state:
+            st.download_button(
+                label="📥 Download Impact Pulse image",
+                data=st.session_state[png_key],
+                file_name=f"ImpactPulse_{home_code}_vs_{away_code}.png",
+                mime="image/png",
+                key=f"ip_dl_{card_index}_{gamecode}",
+            )
+
+
+def build_impact_pulse_png(ip_df: pd.DataFrame,
+                           home_code: str, away_code: str,
+                           home_disp: str, away_disp: str,
+                           round_label: str) -> bytes:
+    """
+    Génère un PNG Impact Pulse format carré (12x12).
+    NETRTG, eFG%, REB%, AST%, TOV% — pas de z-score affiché.
+    Style identique aux game previews : logos ELSTATSLAB + EuroLeague.
+    """
+    IP_EXPORT_METRICS = ["NETRTG", "eFG%", "REB%", "AST%", "TOV%"]
+    IP_EXPORT_COLS = {
+        "NETRTG": ("on_netrtg", "off_netrtg"),
+        "eFG%":   ("on_efg",   "off_efg"),
+        "REB%":   ("on_reb",   "off_reb"),
+        "AST%":   ("on_ast",   "off_ast"),
+        "TOV%":   ("on_tov",   "off_tov"),
+    }
+
+    fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
+    gs = GridSpec(
+        nrows=3, ncols=2,
+        height_ratios=[0.45, 4.5, 0.30],
+        hspace=0.15, wspace=0.08,
+        left=0.04, right=0.96, top=0.96, bottom=0.03,
+    )
+
+    # ── Header ──────────────────────────────────────────────────────────
+    ax_title = fig.add_subplot(gs[0, :])
+    ax_title.axis("off")
+    ax_title.set_xlim(0, 1)
+    ax_title.set_ylim(0, 1)
+
+    if ELSTATSLAB_LOGO.exists():
+        brand_ax = ax_title.inset_axes([0.0, -0.3, 0.16, 1.6])
+        brand_ax.imshow(plt.imread(str(ELSTATSLAB_LOGO)), interpolation="lanczos")
+        brand_ax.axis("off")
+    if EUROLEAGUE_LOGO.exists():
+        el_ax = ax_title.inset_axes([0.84, -0.1, 0.16, 1.2])
+        el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
+        el_ax.axis("off")
+
+    ax_title.text(0.50, 0.65, f"⚡ Impact Pulse  |  EuroLeague {round_label}",
+                  ha="center", va="center", fontsize=20, fontweight="bold",
+                  color="#1a1a1a")
+    ax_title.text(0.50, 0.15, "Who moved the needle?  —  Impact Score: proprietary On/Off composite metric",
+                  ha="center", va="center", fontsize=10,
+                  color="#888888", style="italic")
+
+    # ── Panel par équipe ────────────────────────────────────────────────
+    for col_idx, (code, disp) in enumerate(
+        [(home_code, home_disp), (away_code, away_disp)]
+    ):
+        row = ip_df[ip_df["team_code"].str.upper() == code.upper()]
+        ax = fig.add_subplot(gs[1, col_idx])
+        ax.axis("off")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_facecolor(BG_WHITE)
+
+        if row.empty:
+            ax.text(0.5, 0.5, f"No data for {code}", ha="center", va="center",
+                    fontsize=11, color="#888")
+            continue
+
+        r = row.iloc[0]
+        score = r["impact_score"]
+        score_str = f"{score:+.2f}" if score >= 0 else f"{score:.2f}"
+
+        # Fond de carte header
+        header_bg = plt.matplotlib.patches.FancyBboxPatch(
+            (0.01, 0.82), 0.98, 0.17,
+            boxstyle="round,pad=0.01",
+            facecolor="#1a1a2e", edgecolor="none",
+        )
+        ax.add_patch(header_bg)
+
+        # Logo équipe
+        lp = logo_path(code)
+        if lp:
+            zoom = logo_zoom(code)
+            lw = min(0.10 * zoom, 0.15)
+            lh = min(0.22 * zoom, 0.30)
+            logo_ax = ax.inset_axes([0.02, 0.84, lw, lh])
+            img = plt.imread(str(lp))
+            if img.ndim == 3 and img.shape[2] == 4:
+                alpha = img[:, :, 3:4]
+                rgb = img[:, :, :3]
+                img = rgb * alpha + np.ones_like(rgb) * (1 - alpha)
+            logo_ax.imshow(img, interpolation="lanczos")
+            logo_ax.axis("off")
+
+        # Nom équipe
+        ax.text(0.22, 0.96, disp.upper(), ha="left", va="center",
+                fontsize=8, color="rgba(255,255,255,0.6)" if False else "#aaaacc",
+                fontweight="bold", transform=ax.transAxes)
+
+        # Nom joueur
+        ax.text(0.22, 0.88, r["player_name"].upper(), ha="left", va="center",
+                fontsize=14, color="#ffffff", fontweight="bold",
+                transform=ax.transAxes)
+
+        # Badges
+        ax.text(0.22, 0.84, f"DIFFERENCE MAKER", ha="left", va="center",
+                fontsize=7.5, color="#ffd700", fontweight="bold",
+                transform=ax.transAxes)
+        ax.text(0.65, 0.84, f"Score {score_str}", ha="left", va="center",
+                fontsize=7.5, color="#64ffb4", fontweight="bold",
+                transform=ax.transAxes)
+
+        # Fond clair pour le tableau
+        table_bg = plt.matplotlib.patches.FancyBboxPatch(
+            (0.01, 0.01), 0.98, 0.80,
+            boxstyle="round,pad=0.01",
+            facecolor="#f8f9fa", edgecolor="#dee2e6", linewidth=0.8,
+        )
+        ax.add_patch(table_bg)
+
+        # En-têtes colonnes
+        col_x = [0.15, 0.40, 0.62, 0.84]
+        for cx, hdr in zip(col_x, ["Metric", "ON", "OFF", "Δ"]):
+            ax.text(cx, 0.76, hdr, ha="center", va="center",
+                    fontsize=9, color="#555555", fontweight="bold",
+                    transform=ax.transAxes)
+
+        ax.axhline(0.73, xmin=0.03, xmax=0.97, color="#dee2e6", linewidth=0.8)
+
+        row_h = 0.128
+        y_start = 0.665
+
+        for i, m in enumerate(IP_EXPORT_METRICS):
+            y = y_start - i * row_h
+            on_col, off_col = IP_EXPORT_COLS[m]
+            on_val  = r[on_col]
+            off_val = r[off_col]
+            delta   = on_val - off_val
+
+            if m in IP_LOWER_IS_BETTER:
+                good = delta <= -0.3
+                bad  = delta >= 0.3
+            else:
+                good = delta >= 0.3
+                bad  = delta <= -0.3
+
+            row_bg = "#e8f5e9" if good else ("#ffebee" if bad else "#ffffff")
+            bg_rect = plt.matplotlib.patches.FancyBboxPatch(
+                (0.03, y - row_h * 0.44), 0.94, row_h * 0.85,
+                boxstyle="round,pad=0.005",
+                facecolor=row_bg, edgecolor="none",
+                transform=ax.transAxes,
+            )
+            ax.add_patch(bg_rect)
+
+            delta_color = "#2e7d32" if good else ("#c62828" if bad else "#888888")
+            delta_str = f"{delta:+.1f}"
+
+            ax.text(col_x[0], y, m, ha="center", va="center",
+                    fontsize=10, color="#444444", transform=ax.transAxes)
+            ax.text(col_x[1], y, f"{on_val:.1f}", ha="center", va="center",
+                    fontsize=11, color="#1a1a1a", fontweight="bold",
+                    transform=ax.transAxes)
+            ax.text(col_x[2], y, f"{off_val:.1f}", ha="center", va="center",
+                    fontsize=10, color="#777777", transform=ax.transAxes)
+            ax.text(col_x[3], y, delta_str, ha="center", va="center",
+                    fontsize=11, color=delta_color, fontweight="bold",
+                    transform=ax.transAxes)
+
+        ax.text(0.50, 0.04, "Min. threshold: 12 poss/game",
+                ha="center", va="center", fontsize=7.5,
+                color="#aaaaaa", style="italic", transform=ax.transAxes)
+
+    # ── Footer ──────────────────────────────────────────────────────────
+    ax_foot = fig.add_subplot(gs[2, :])
+    ax_foot.axis("off")
+    ax_foot.set_xlim(0, 1)
+    ax_foot.set_ylim(0, 1)
+    ax_foot.text(0.5, 0.5, "DataViz by  𝕏 @EL_Statslab  |  elstatslab.com",
+                 ha="center", va="center", fontsize=10,
+                 color="#888888", style="italic")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# =============================================================================
 # MATCH ANALYSIS RENDERER
 # =============================================================================
 def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
@@ -1487,6 +1888,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                                          home_disp, away_disp,
                                          h_recent, a_recent)
 
+    # ── Gameflow ──────────────────────────────────────────────────────────
     if played:
         raw_gc = g["gamecode"]
         if isinstance(raw_gc, str) and "_" in raw_gc:
@@ -1499,6 +1901,19 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             st.divider()
             with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
                 st.image(gf_png, use_container_width=True)
+
+        # ── Impact Pulse ──────────────────────────────────────────────────
+        st.divider()
+        render_impact_pulse_section(
+            gamecode=gc_num,
+            season=rnd_season,
+            home_code=hcode,
+            away_code=acode,
+            home_disp=home_disp,
+            away_disp=away_disp,
+            round_label=round_label_long,
+            card_index=card_index,
+        )
 
     st.divider()
 
@@ -1821,6 +2236,13 @@ and offensive/defensive style matchup. During playoffs, the model also integrate
 the current series context — the weight of games already played in the series increases
 with each game (G1=20%, G2=35%, G3=45%). For the Final Four, home court advantage
 is removed as games are played on neutral court.
+
+*Section 5* : **Impact Pulse**
+
+**Impact Score** is a composite z-score combining On/Off deltas across six metrics:
+NETRTG (35%), eFG% (20%), REB% (15%), AST% (15%), OREB% (10%), TOV% (5%).
+It measures how far above average a player's impact was relative to his teammates
+within this single game. Minimum threshold: 12 possessions on court.
     """)
 
     with st.expander("ℹ️ About ELSTATSLAB Match Center"):
