@@ -9,9 +9,16 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping elstatslab
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Playwright
+        run: npx playwright install chromium --with-deps
+
+      - name: Visit elstatslab with real browser
         run: |
-          curl -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
-               -L --max-time 30 \
-               https://elstatslab.streamlit.app/ \
-               -o /dev/null -s -w "HTTP status: %{http_code}\n"
+          npx playwright@latest open --browser chromium https://elstatslab.streamlit.app/ &
+          sleep 20
+          echo "Done"
