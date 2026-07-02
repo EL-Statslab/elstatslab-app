@@ -24,6 +24,7 @@ from matplotlib.gridspec import GridSpec
 from PIL import Image
 
 from gameflow_chart import render_gameflow_png
+import team_cards
 
 # =============================================================================
 # CONFIG
@@ -49,7 +50,7 @@ st.set_page_config(
     page_title="ELSTATSLAB Match Center",
     page_icon=str(ELSTATSLAB_LOGO) if ELSTATSLAB_LOGO.exists() else "🏀",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # =============================================================================
@@ -1981,15 +1982,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 # =============================================================================
 # APP
 # =============================================================================
-def main():
-    title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
-    with title_col1:
-        if ELSTATSLAB_LOGO.exists():
-            st.image(str(ELSTATSLAB_LOGO), width=110)
-    with title_col2:
-        st.title("ELSTATSLAB Match Center")
-        st.caption("Compare any EuroLeague matchup. Built by @EL_Statslab.")
-
+def render_match_center():
     with st.sidebar:
         st.header("Filters")
         seasons = load_seasons()
@@ -2259,6 +2252,37 @@ within this single game. Minimum threshold: 12 possessions on court.
         )
 
     st.caption("DataViz by @EL_Statslab")
+
+
+def main():
+    st.markdown(
+        """
+        <style>
+        button[data-baseweb="tab"] p {
+            font-size: 18px !important;
+            font-weight: 600 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
+    with title_col1:
+        if ELSTATSLAB_LOGO.exists():
+            st.image(str(ELSTATSLAB_LOGO), width=110)
+    with title_col2:
+        st.title("ELSTATSLAB")
+        st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
+
+    tab_match, tab_cards = st.tabs(["📊 Match Center", "🛡️ Team Cards"])
+
+    with tab_match:
+        st.caption("Compare any EuroLeague matchup.")
+        render_match_center()
+
+    with tab_cards:
+        team_cards.render()
 
 
 if __name__ == "__main__":
