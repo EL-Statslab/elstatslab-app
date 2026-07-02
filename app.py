@@ -50,7 +50,7 @@ st.set_page_config(
     page_title="ELSTATSLAB Match Center",
     page_icon=str(ELSTATSLAB_LOGO) if ELSTATSLAB_LOGO.exists() else "🏀",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # =============================================================================
