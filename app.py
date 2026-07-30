@@ -143,7 +143,7 @@ def get_conn():
 
 @st.cache_data(ttl=600)
 def load_seasons() -> list[int]:
-    return [CURRENT_SEASON]
+    return [2026, 2025]
 
 
 @st.cache_data(ttl=600)
