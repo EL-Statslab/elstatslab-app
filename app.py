@@ -57,7 +57,7 @@ st.set_page_config(
 # LOGO MAPPING
 # =============================================================================
 LOGO_MAP = {
-    "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "BJK": "BJK.png", "DUB": "DUB.png",
+    "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "BES": "BJK.png", "DUB": "DUB.png",
     "HTA": "HTA.png", "IST": "EFS.png", "MAD": "RMD.png", "MCO": "ASM.png",
     "MIL": "AXM.png", "MUN": "BAY.png", "OLY": "OLY.png", "PAM": "VAL.png",
     "PAN": "PAO.png", "PAR": "PAR.png", "PRS": "PBB.png", "RED": "CZV.png",
@@ -74,7 +74,7 @@ TEAM_DISPLAY_NAMES = {
     "ASV": "LDLC ASVEL Villeurbanne",
     "BAR": "FC Barcelona",
     "BAS": "Baskonia Vitoria-Gasteiz",
-    "BJK": "Beşiktaş Istanbul",
+    "BES": "Beşiktaş Istanbul",
     "DUB": "Dubai Basketball",
     "HTA": "Hapoel Tel Aviv",
     "IST": "Anadolu Efes Istanbul",
