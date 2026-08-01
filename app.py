@@ -66,7 +66,7 @@ LOGO_MAP = {
 
 ZOOM_CORRECTIONS = {
     "ASM": 1.3, "AXM": 1.5, "CZV": 1.6, "EFS": 0.8,
-    "FEN": 1.7, "BAR": 0.8, "PAO": 1.1, "VIR": 0.85,
+    "FEN": 1.0, "BAR": 0.8, "PAO": 1.1, "VIR": 0.85,
     "PBB": 0.85, "OLY": 0.9, "HTA": 0.8,
 }
 
