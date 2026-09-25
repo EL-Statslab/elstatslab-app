@@ -106,14 +106,14 @@ def _qt_bounds(ps):
 
 
 def _draw_team(ax, code, name, x_center):
-    """Copie exacte de draw_team_block dans app.py. Aucune modification."""
-    base_w, base_h = 0.18, 0.55
+    """Logos agrandis pour peser autant visuellement que le logo ELSTATSLAB du titre."""
+    base_w, base_h = 0.30, 1.15
     zoom = _logo_zoom(code)
     w = base_w * zoom
     h = base_h * zoom
-    w = min(w, 0.28)
-    h = min(h, 0.85)
-    logo_y = 0.55
+    w = min(w, 0.40)
+    h = min(h, 1.55)
+    logo_y = 0.60
     lp = _logo_path(code)
     if lp:
         img = plt.imread(str(lp))
@@ -126,8 +126,8 @@ def _draw_team(ax, code, name, x_center):
         la = ax.inset_axes([x_center - w/2, logo_y - h/2 + 0.15, w, h])
         la.imshow(img, interpolation="lanczos")
         la.axis("off")
-    ax.text(x_center, 0.22, name, ha="center", va="top",
-            fontsize=13, fontweight="bold", color=COLOR_TEXT)
+    ax.text(x_center, 0.14, name, ha="center", va="top",
+            fontsize=13, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
 
 
 def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspect="square"):
@@ -149,22 +149,22 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     if aspect == "16:9":
         fig = plt.figure(figsize=(12, 6.75), dpi=120, facecolor=COLOR_BG)
         gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.55, 0.6, 2.9, 0.85, 1.0, 0.3],
+                              height_ratios=[0.55, 1.2, 2.9, 0.85, 1.0, 0.3],
                               hspace=0.25,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
         title_fs = 15
-        score_fs = 24; name_fs = 11; run_fs = 8.5; best5_title_fs = 10
-        best5_team_fs = 9; best5_stat_fs = 8; best5_players_fs = 8
+        score_fs = 24; name_fs = 11; run_fs = 11.5; best5_title_fs = 13
+        best5_team_fs = 12; best5_stat_fs = 10.5; best5_players_fs = 11.5
         footer_fs = 9
     else:
         fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=COLOR_BG)
         gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.6, 0.8, 3.3, 1.0, 1.2, 0.6],
+                              height_ratios=[0.6, 1.7, 3.3, 1.0, 1.2, 0.6],
                               hspace=0.30,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
         title_fs = 17
-        score_fs = 30; name_fs = 13; run_fs = 9.5; best5_title_fs = 11
-        best5_team_fs = 10; best5_stat_fs = 9; best5_players_fs = 9
+        score_fs = 30; name_fs = 13; run_fs = 13.5; best5_title_fs = 15
+        best5_team_fs = 13.5; best5_stat_fs = 12; best5_players_fs = 13.5
         footer_fs = 11
 
     # ─── Bandeau de titre (logo ELSTATSLAB + round + logo EuroLeague) ──────
@@ -239,48 +239,74 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     # ─── Biggest runs ──────────────────────────────────────────────────────
     ax_r = fig.add_subplot(gs[3])
     ax_r.set_facecolor(COLOR_BG); ax_r.set_xlim(0,10); ax_r.set_ylim(0,10); ax_r.axis("off")
-    ax_r.text(5, 9.3, "BIGGEST RUNS", ha="center", va="center",
+    ax_r.text(5, 9.5, "BIGGEST RUNS", ha="center", va="center",
               fontsize=best5_title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
     if runs:
         sr = sorted(runs, key=lambda r: -r["pts"])[:3]
         n_runs = len(sr)
-        row_h_run = 2.3
-        y0 = 5.5 + (n_runs - 1) * row_h_run / 2
+        row_h_run = 2.4
+        y0 = 5.1 + (n_runs - 1) * row_h_run / 2
         for i, r in enumerate(sr):
             y = y0 - i * row_h_run
             code = hc if r["team"] == "home" else ac
             c = COLOR_HOME if r["team"] == "home" else COLOR_AWAY
             ld = r.get("leader", ""); lp_ = r.get("leader_pts")
             detail = f"led by {ld}" + (f", {lp_} pts" if lp_ is not None else "")
-            ax_r.text(4.7, y, f"{code} +{r['pts']}", ha="right", va="center",
+
+            chip = plt.matplotlib.patches.FancyBboxPatch(
+                (0.4, y - row_h_run * 0.34), 9.2, row_h_run * 0.66,
+                boxstyle="round,pad=0.02", facecolor="#f5f6f7", edgecolor="none",
+            )
+            ax_r.add_patch(chip)
+            accent = plt.matplotlib.patches.FancyBboxPatch(
+                (0.4, y - row_h_run * 0.32), 0.10, row_h_run * 0.62,
+                boxstyle="round,pad=0.005", facecolor=c, edgecolor="none",
+            )
+            ax_r.add_patch(accent)
+
+            ax_r.text(1.1, y, f"{code} +{r['pts']}", ha="left", va="center",
                       fontsize=run_fs + 2.5, fontproperties=BARLOW_BOLD, color=c)
-            ax_r.text(5.1, y, detail, ha="left", va="center",
-                      fontsize=run_fs, fontproperties=BARLOW_REGULAR, color=COLOR_TEXT)
-        ax_r.text(5, 0.4, "A run is a streak of points scored without the opponent scoring.",
-                  ha="center", va="center", fontsize=7.5, fontproperties=BARLOW_REGULAR,
+            ax_r.text(9.1, y, detail, ha="right", va="center",
+                      fontsize=run_fs + 1.5, fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a")
+        ax_r.text(5, 0.3, "A run is a streak of points scored without the opponent scoring.",
+                  ha="center", va="center", fontsize=8, fontproperties=BARLOW_REGULAR,
                   color=COLOR_SUBTLE, style="italic")
     else:
         ax_r.text(5, 5, "No runs ≥ 9 pts detected", ha="center", va="center",
-                  fontsize=9, fontproperties=BARLOW_REGULAR, color=COLOR_SUBTLE, style="italic")
+                  fontsize=10, fontproperties=BARLOW_REGULAR, color=COLOR_SUBTLE, style="italic")
 
     # ─── Best 5 ────────────────────────────────────────────────────────────
     ax_b = fig.add_subplot(gs[4])
     ax_b.set_facecolor(COLOR_BG); ax_b.set_xlim(0,10); ax_b.set_ylim(0,10); ax_b.axis("off")
-    ax_b.text(5, 9.2, "BEST 5 BY NETRTG", ha="center", va="center",
+    ax_b.text(5, 9.5, "BEST 5 BY NETRTG", ha="center", va="center",
               fontsize=best5_title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
-    for lu, xp, tc in [
-        (next((l for l in lineups if l["team_code"]==hc),None), 2.5, COLOR_HOME),
-        (next((l for l in lineups if l["team_code"]==ac),None), 7.5, COLOR_AWAY),
+    for lu, x0, tc in [
+        (next((l for l in lineups if l["team_code"]==hc),None), 0.3, COLOR_HOME),
+        (next((l for l in lineups if l["team_code"]==ac),None), 5.2, COLOR_AWAY),
     ]:
         if not lu: continue
+        xp = x0 + 2.25
+        card = plt.matplotlib.patches.FancyBboxPatch(
+            (x0, 0.6), 4.5, 7.6,
+            boxstyle="round,pad=0.03", facecolor="#f5f6f7", edgecolor="none",
+        )
+        ax_b.add_patch(card)
+        top_accent = plt.matplotlib.patches.FancyBboxPatch(
+            (x0, 7.75), 4.5, 0.16,
+            boxstyle="round,pad=0.005", facecolor=tc, edgecolor="none",
+        )
+        ax_b.add_patch(top_accent)
+
         tl = dname(lu["team_code"], lu["team"])
-        ax_b.text(xp, 7.0, tl, ha="center", va="center",
-                  fontsize=best5_team_fs + 1, fontproperties=BARLOW_BOLD, color=tc)
-        ax_b.text(xp, 4.9, f"{lu['pts_for']}-{lu['pts_against']}   ·   NetRtg {lu['net_rtg']:+.1f}   ·   {lu['min']}",
+        ax_b.text(xp, 6.9, tl, ha="center", va="center",
+                  fontsize=best5_team_fs, fontproperties=BARLOW_BOLD, color=tc)
+        ax_b.text(xp, 5.5, f"{lu['pts_for']}-{lu['pts_against']}   ·   NetRtg {lu['net_rtg']:+.1f}   ·   {lu['min']}",
                   ha="center", va="center", fontsize=best5_stat_fs, fontproperties=BARLOW_SEMIBOLD, color=COLOR_TEXT)
-        ax_b.text(xp, 2.2, "  ·  ".join(lu["players"]),
-                  ha="center", va="center", fontsize=best5_players_fs, fontproperties=BARLOW_REGULAR,
-                  color=COLOR_SUBTLE)
+
+        # 5 joueurs sur une seule ligne, en gras noir pour un repérage rapide
+        # (mesuré : tient largement dans la carte même avec un nom composé long)
+        ax_b.text(xp, 2.7, "  ·  ".join(lu["players"]), ha="center", va="center",
+                  fontsize=best5_players_fs + 1, fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a")
 
 # ─── Footer ────────────────────────────────────────────────────────────
     ax_f = fig.add_subplot(gs[5])
@@ -310,7 +336,7 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--gamecode", type=int, required=True)
-    p.add_argument("--season", type=int, default=2026)
+    p.add_argument("--season", type=int, default=2025)
     p.add_argument("--round-label", type=str, default="")
     p.add_argument("--output", type=str, default=None)
     p.add_argument("--aspect", type=str, default="square", choices=["square", "16:9"])
