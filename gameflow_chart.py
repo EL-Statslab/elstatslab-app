@@ -6,6 +6,7 @@ import sqlite3, json, io
 from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib import font_manager
 import numpy as np
 
 APP_ROOT  = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP")
@@ -21,9 +22,26 @@ else:
 
 LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
+EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
+
+# Police de marque (Barlow Condensed). Même dossier fonts/ que app.py ;
+# retombe automatiquement sur la police par défaut si les fichiers sont absents.
+FONTS_DIR = Path("fonts")
+
+
+def _brand_font(filename: str, fallback_weight: str = "bold") -> font_manager.FontProperties:
+    fp = FONTS_DIR / filename
+    if fp.exists():
+        return font_manager.FontProperties(fname=str(fp))
+    return font_manager.FontProperties(weight=fallback_weight)
+
+
+BARLOW_BOLD     = _brand_font("BarlowCondensed-Bold.ttf", "bold")
+BARLOW_SEMIBOLD = _brand_font("BarlowCondensed-SemiBold.ttf", "semibold")
+BARLOW_REGULAR  = _brand_font("BarlowCondensed-Regular.ttf", "regular")
 
 LOGO_MAP = {
-    "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "DUB": "DUB.png",
+    "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "BES": "BJK.png", "DUB": "DUB.png",
     "HTA": "HTA.png", "IST": "EFS.png", "MAD": "RMD.png", "MCO": "ASM.png",
     "MIL": "AXM.png", "MUN": "BAY.png", "OLY": "OLY.png", "PAM": "VAL.png",
     "PAN": "PAO.png", "PAR": "PAR.png", "PRS": "PBB.png", "RED": "CZV.png",
@@ -36,7 +54,7 @@ ZOOM_CORRECTIONS = {
 }
 TEAM_DISPLAY_NAMES = {
     "ASV": "LDLC ASVEL Villeurbanne", "BAR": "FC Barcelona",
-    "BAS": "Baskonia Vitoria-Gasteiz", "DUB": "Dubai Basketball",
+    "BAS": "Baskonia Vitoria-Gasteiz", "BES": "Beşiktaş Istanbul", "DUB": "Dubai Basketball",
     "HTA": "Hapoel Tel Aviv", "IST": "Anadolu Efes Istanbul",
     "MAD": "Real Madrid", "MCO": "AS Monaco",
     "MIL": "EA7 Emporio Armani Milan", "MUN": "FC Bayern Munich",
@@ -112,10 +130,11 @@ def _draw_team(ax, code, name, x_center):
             fontsize=13, fontweight="bold", color=COLOR_TEXT)
 
 
-def render_gameflow_png(gamecode, season, output_path=None, aspect="square"):
+def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspect="square"):
     """
     Génère le PNG du gameflow.
     aspect: "square" (12×12 pour site) ou "16:9" (12×6.75 pour export X)
+    round_label: ex. "Regular Season Round 3", affiché dans le bandeau de titre
     """
     data = load_gameflow(gamecode, season)
     if not data:
@@ -129,25 +148,44 @@ def render_gameflow_png(gamecode, season, output_path=None, aspect="square"):
 
     if aspect == "16:9":
         fig = plt.figure(figsize=(12, 6.75), dpi=120, facecolor=COLOR_BG)
-        gs = fig.add_gridspec(5, 1,
-                              height_ratios=[0.6, 3.0, 0.4, 0.8, 0.3],
+        gs = fig.add_gridspec(6, 1,
+                              height_ratios=[0.55, 0.6, 2.9, 0.85, 1.0, 0.3],
                               hspace=0.25,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
+        title_fs = 15
         score_fs = 24; name_fs = 11; run_fs = 8.5; best5_title_fs = 10
         best5_team_fs = 9; best5_stat_fs = 8; best5_players_fs = 8
         footer_fs = 9
     else:
         fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=COLOR_BG)
-        gs = fig.add_gridspec(5, 1,
-                              height_ratios=[0.8, 3.5, 0.5, 1.0, 0.4],
+        gs = fig.add_gridspec(6, 1,
+                              height_ratios=[0.6, 0.8, 3.3, 1.0, 1.2, 0.6],
                               hspace=0.30,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
+        title_fs = 17
         score_fs = 30; name_fs = 13; run_fs = 9.5; best5_title_fs = 11
         best5_team_fs = 10; best5_stat_fs = 9; best5_players_fs = 9
         footer_fs = 11
 
-    # ─── Header ────────────────────────────────────────────────────────────
-    ax_h = fig.add_subplot(gs[0])
+    # ─── Bandeau de titre (logo ELSTATSLAB + round + logo EuroLeague) ──────
+    ax_title = fig.add_subplot(gs[0])
+    ax_title.axis("off"); ax_title.set_xlim(0, 1); ax_title.set_ylim(0, 1)
+
+    if ELSTATSLAB_LOGO.exists():
+        brand_ax = ax_title.inset_axes([0.0, -0.3, 0.16, 1.6])
+        brand_ax.imshow(plt.imread(str(ELSTATSLAB_LOGO)), interpolation="lanczos")
+        brand_ax.axis("off")
+    if EUROLEAGUE_LOGO.exists():
+        el_ax = ax_title.inset_axes([0.84, -0.1, 0.16, 1.2])
+        el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
+        el_ax.axis("off")
+
+    title_text = f"Game Flow  |  EuroLeague {round_label}".strip()
+    ax_title.text(0.50, 0.5, title_text, ha="center", va="center",
+                  fontsize=title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
+
+    # ─── Header (logos équipes + score) ─────────────────────────────────────
+    ax_h = fig.add_subplot(gs[1])
     ax_h.axis("off"); ax_h.set_xlim(0, 1); ax_h.set_ylim(0, 1)
 
     _draw_team(ax_h, hc, hn, 0.17)
@@ -156,7 +194,7 @@ def render_gameflow_png(gamecode, season, output_path=None, aspect="square"):
     _draw_team(ax_h, ac, an, 0.83)
 
     # ─── Chart ─────────────────────────────────────────────────────────────
-    ax = fig.add_subplot(gs[1])
+    ax = fig.add_subplot(gs[2])
     ax.set_facecolor(COLOR_BG)
     n = len(ds); x = list(range(n))
     ax.plot(x, ds, color=COLOR_AXIS, linewidth=1.8, zorder=3)
@@ -199,46 +237,63 @@ def render_gameflow_png(gamecode, season, output_path=None, aspect="square"):
                 fontsize=10, color=c, fontweight="bold", zorder=5)
 
     # ─── Biggest runs ──────────────────────────────────────────────────────
-    ax_r = fig.add_subplot(gs[2])
+    ax_r = fig.add_subplot(gs[3])
     ax_r.set_facecolor(COLOR_BG); ax_r.set_xlim(0,10); ax_r.set_ylim(0,10); ax_r.axis("off")
+    ax_r.text(5, 9.3, "BIGGEST RUNS", ha="center", va="center",
+              fontsize=best5_title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
     if runs:
         sr = sorted(runs, key=lambda r: -r["pts"])[:3]
-        parts=[]
-        for r in sr:
-            code = hc if r["team"]=="home" else ac
-            ld=r.get("leader",""); lp_=r.get("leader_pts")
-            if lp_ is not None: parts.append(f"{code} +{r['pts']} (led by {ld}, {lp_} pts)")
-            else: parts.append(f"{code} +{r['pts']} (led by {ld})")
-        ax_r.text(5, 6.5, "Biggest runs :  "+"   |   ".join(parts),
-                  ha="center", va="center", fontsize=run_fs, color=COLOR_TEXT)
-        ax_r.text(5, 2.5, "A run is a streak of points scored without the opponent scoring.",
-                  ha="center", va="center", fontsize=8, color=COLOR_SUBTLE, style="italic")
+        n_runs = len(sr)
+        row_h_run = 2.3
+        y0 = 5.5 + (n_runs - 1) * row_h_run / 2
+        for i, r in enumerate(sr):
+            y = y0 - i * row_h_run
+            code = hc if r["team"] == "home" else ac
+            c = COLOR_HOME if r["team"] == "home" else COLOR_AWAY
+            ld = r.get("leader", ""); lp_ = r.get("leader_pts")
+            detail = f"led by {ld}" + (f", {lp_} pts" if lp_ is not None else "")
+            ax_r.text(4.7, y, f"{code} +{r['pts']}", ha="right", va="center",
+                      fontsize=run_fs + 2.5, fontproperties=BARLOW_BOLD, color=c)
+            ax_r.text(5.1, y, detail, ha="left", va="center",
+                      fontsize=run_fs, fontproperties=BARLOW_REGULAR, color=COLOR_TEXT)
+        ax_r.text(5, 0.4, "A run is a streak of points scored without the opponent scoring.",
+                  ha="center", va="center", fontsize=7.5, fontproperties=BARLOW_REGULAR,
+                  color=COLOR_SUBTLE, style="italic")
     else:
-        ax_r.text(5,5,"No runs ≥ 9 pts detected", ha="center", va="center",
-                  fontsize=9, color=COLOR_SUBTLE, style="italic")
+        ax_r.text(5, 5, "No runs ≥ 9 pts detected", ha="center", va="center",
+                  fontsize=9, fontproperties=BARLOW_REGULAR, color=COLOR_SUBTLE, style="italic")
 
     # ─── Best 5 ────────────────────────────────────────────────────────────
-    ax_b = fig.add_subplot(gs[3])
+    ax_b = fig.add_subplot(gs[4])
     ax_b.set_facecolor(COLOR_BG); ax_b.set_xlim(0,10); ax_b.set_ylim(0,10); ax_b.axis("off")
-    ax_b.text(5, 8.5, "Best 5 by NetRtg", ha="center", va="center",
-              fontsize=best5_title_fs, color=COLOR_TEXT, fontweight="bold")
+    ax_b.text(5, 9.2, "BEST 5 BY NETRTG", ha="center", va="center",
+              fontsize=best5_title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
     for lu, xp, tc in [
         (next((l for l in lineups if l["team_code"]==hc),None), 2.5, COLOR_HOME),
         (next((l for l in lineups if l["team_code"]==ac),None), 7.5, COLOR_AWAY),
     ]:
         if not lu: continue
         tl = dname(lu["team_code"], lu["team"])
-        ax_b.text(xp,5.5, tl, ha="center", va="center", fontsize=best5_team_fs, color=tc, fontweight="bold")
-        ax_b.text(xp,3.5, f"{lu['pts_for']}-{lu['pts_against']}  |  NetRtg {lu['net_rtg']:+.1f}  |  {lu['min']}",
-                  ha="center", va="center", fontsize=best5_stat_fs, color=COLOR_TEXT)
-        ax_b.text(xp,1.5, " · ".join(lu["players"]),
-                  ha="center", va="center", fontsize=best5_players_fs, color=COLOR_TEXT)
+        ax_b.text(xp, 7.0, tl, ha="center", va="center",
+                  fontsize=best5_team_fs + 1, fontproperties=BARLOW_BOLD, color=tc)
+        ax_b.text(xp, 4.9, f"{lu['pts_for']}-{lu['pts_against']}   ·   NetRtg {lu['net_rtg']:+.1f}   ·   {lu['min']}",
+                  ha="center", va="center", fontsize=best5_stat_fs, fontproperties=BARLOW_SEMIBOLD, color=COLOR_TEXT)
+        ax_b.text(xp, 2.2, "  ·  ".join(lu["players"]),
+                  ha="center", va="center", fontsize=best5_players_fs, fontproperties=BARLOW_REGULAR,
+                  color=COLOR_SUBTLE)
 
 # ─── Footer ────────────────────────────────────────────────────────────
-    ax_f = fig.add_subplot(gs[4])
+    ax_f = fig.add_subplot(gs[5])
     ax_f.axis("off"); ax_f.set_xlim(0,1); ax_f.set_ylim(0,1)
-    ax_f.text(0.5, 0.5, "DataViz by  𝕏 @EL_Statslab",
-              ha="center", va="center", fontsize=footer_fs, color="#555555", style="italic")
+    ax_f.text(0.47, 0.64, "DataViz By EL_STATSLAB", ha="right", va="center",
+              fontsize=footer_fs + 4, fontproperties=BARLOW_BOLD, color="#1a1a1a")
+    ax_f.text(0.5, 0.64, "·", ha="center", va="center",
+              fontsize=footer_fs + 4, color="#bbbbbb")
+    ax_f.text(0.53, 0.64, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
+              fontsize=footer_fs - 0.5, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
+    ax_f.text(0.5, 0.24, "𝕏 @EL_Statslab   ·   elstatslab.com",
+              ha="center", va="center", fontsize=footer_fs - 0.5,
+              fontproperties=BARLOW_REGULAR, color="#888888")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=COLOR_BG, dpi=120)
@@ -255,10 +310,11 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--gamecode", type=int, required=True)
-    p.add_argument("--season", type=int, default=2025)
+    p.add_argument("--season", type=int, default=2026)
+    p.add_argument("--round-label", type=str, default="")
     p.add_argument("--output", type=str, default=None)
     p.add_argument("--aspect", type=str, default="square", choices=["square", "16:9"])
     a = p.parse_args()
-    render_gameflow_png(a.gamecode, a.season,
+    render_gameflow_png(a.gamecode, a.season, round_label=a.round_label,
                         output_path=a.output or f"gameflow_E{a.season}_{a.gamecode}.png",
                         aspect=a.aspect)
