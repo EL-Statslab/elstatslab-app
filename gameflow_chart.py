@@ -107,12 +107,12 @@ def _qt_bounds(ps):
 
 def _draw_team(ax, code, name, x_center):
     """Logos agrandis pour peser autant visuellement que le logo ELSTATSLAB du titre."""
-    base_w, base_h = 0.26, 0.95
+    base_w, base_h = 0.22, 0.80
     zoom = _logo_zoom(code)
     w = base_w * zoom
     h = base_h * zoom
-    w = min(w, 0.36)
-    h = min(h, 1.35)
+    w = min(w, 0.30)
+    h = min(h, 1.10)
     logo_y = 0.60
     lp = _logo_path(code)
     if lp:
@@ -149,7 +149,7 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     if aspect == "16:9":
         fig = plt.figure(figsize=(12, 6.75), dpi=120, facecolor=COLOR_BG)
         gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.55, 1.0, 2.9, 0.85, 1.0, 0.3],
+                              height_ratios=[0.55, 0.85, 2.9, 0.85, 1.0, 0.3],
                               hspace=0.25,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
         title_fs = 15
@@ -159,7 +159,7 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     else:
         fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=COLOR_BG)
         gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.6, 1.5, 3.3, 1.0, 1.2, 0.6],
+                              height_ratios=[0.6, 1.3, 3.3, 1.0, 1.2, 0.6],
                               hspace=0.30,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
         title_fs = 17
