@@ -148,7 +148,10 @@ def get_gameflow_png(gamecode: int, season: int, round_label: str = "",
                      aspect: str = "square") -> bytes | None:
     try:
         return render_gameflow_png(gamecode, season, round_label=round_label, aspect=aspect)
-    except Exception:
+    except Exception as e:
+        import traceback
+        st.error(f"Game Flow error: {e}")
+        st.code(traceback.format_exc())
         return None
 
 
