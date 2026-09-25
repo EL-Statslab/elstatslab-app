@@ -1184,7 +1184,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
     gs = GridSpec(
         nrows=5, ncols=2,
-        height_ratios=[0.6, 2.2, 3.8, 1.2, 0.4],
+        height_ratios=[0.6, 2.2, 3.8, 1.2, 0.7],
         hspace=0.35, wspace=0.15,
         left=0.05, right=0.95, top=0.95, bottom=0.03,
     )
@@ -1357,9 +1357,15 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_foot.axis("off")
     ax_foot.set_xlim(0, 1)
     ax_foot.set_ylim(0, 1)
-    ax_foot.text(0.5, 0.5, "DataViz by  𝕏 @EL_Statslab",
-                 ha="center", va="center", fontsize=11,
-                 color="#888888", style="italic")
+    ax_foot.text(0.47, 0.64, "DataViz By EL_STATSLAB", ha="right", va="center",
+                 fontsize=15, fontweight="bold", color="#1a1a1a")
+    ax_foot.text(0.5, 0.64, "·", ha="center", va="center",
+                 fontsize=15, color="#bbbbbb")
+    ax_foot.text(0.53, 0.64, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
+                 fontsize=10.5, fontweight="bold", color="#e8491c")
+    ax_foot.text(0.5, 0.24, "𝕏 @EL_Statslab   ·   elstatslab.com",
+                 ha="center", va="center", fontsize=10.5,
+                 color="#888888")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120)
@@ -1606,7 +1612,7 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
     fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
     gs = GridSpec(
         nrows=3, ncols=2,
-        height_ratios=[0.45, 4.5, 0.30],
+        height_ratios=[0.45, 4.5, 0.45],
         hspace=0.15, wspace=0.08,
         left=0.04, right=0.96, top=0.96, bottom=0.03,
     )
@@ -1760,9 +1766,15 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
     ax_foot.axis("off")
     ax_foot.set_xlim(0, 1)
     ax_foot.set_ylim(0, 1)
-    ax_foot.text(0.5, 0.5, "DataViz by  𝕏 @EL_Statslab  |  elstatslab.com",
-                 ha="center", va="center", fontsize=10,
-                 color="#888888", style="italic")
+    ax_foot.text(0.47, 0.66, "DataViz By EL_STATSLAB", ha="right", va="center",
+                 fontsize=15, fontweight="bold", color="#1a1a1a")
+    ax_foot.text(0.5, 0.66, "·", ha="center", va="center",
+                 fontsize=15, color="#bbbbbb")
+    ax_foot.text(0.53, 0.66, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
+                 fontsize=10.5, fontweight="bold", color="#e8491c")
+    ax_foot.text(0.5, 0.26, "𝕏 @EL_Statslab   ·   elstatslab.com",
+                 ha="center", va="center", fontsize=10.5,
+                 color="#888888")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120, bbox_inches="tight")
