@@ -176,7 +176,7 @@ def _draw_team(ax, code, name, x_center):
     """Logo recadré automatiquement sur son contenu réel (voir _autocrop_logo),
     donc plus besoin de facteur de zoom manuel par équipe : chaque logo est
     normalisé à la même taille de base, peu importe la marge du fichier source."""
-    base_w, base_h = 0.24, 0.85
+    base_w, base_h = 0.19, 0.68
     logo_y = 0.60
     lp = _logo_path(code)
     if lp:
@@ -215,7 +215,7 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     if aspect == "16:9":
         fig = plt.figure(figsize=(12, 6.75), dpi=120, facecolor=COLOR_BG)
         gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.55, 0.85, 2.9, 0.85, 1.0, 0.3],
+                              height_ratios=[0.55, 0.70, 2.9, 0.85, 1.0, 0.3],
                               hspace=0.25,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
         title_fs = 15
@@ -225,7 +225,7 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     else:
         fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=COLOR_BG)
         gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.6, 1.3, 3.3, 1.0, 1.2, 0.6],
+                              height_ratios=[0.6, 1.05, 3.3, 1.0, 1.2, 0.6],
                               hspace=0.30,
                               left=0.08, right=0.95, top=0.95, bottom=0.03)
         title_fs = 17
