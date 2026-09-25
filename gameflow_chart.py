@@ -40,6 +40,71 @@ BARLOW_BOLD     = _brand_font("BarlowCondensed-Bold.ttf", "bold")
 BARLOW_SEMIBOLD = _brand_font("BarlowCondensed-SemiBold.ttf", "semibold")
 BARLOW_REGULAR  = _brand_font("BarlowCondensed-Regular.ttf", "regular")
 
+
+def _autocrop_logo(img_arr):
+    """
+    Recadre une image RGBA sur son contenu réel :
+    1) coupe la marge transparente autour du dessin
+    2) si un bloc secondaire (logo sponsor, texte) est séparé du dessin
+       principal par un vrai espace vide, ne garde que le premier bloc
+       (le blason/l'écusson), pas le sponsor en dessous.
+    Corrige les logos avec beaucoup de marge (ex: CZV) ou un sponsor
+    intégré au fichier (ex: FEN) sans réglage manuel par équipe.
+    """
+    alpha = img_arr[:, :, 3]
+    ys, xs = np.where(alpha > 0.04)
+    if len(xs) == 0:
+        return img_arr
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    cropped = img_arr[y0:y1 + 1, x0:x1 + 1]
+
+    h = cropped.shape[0]
+    a2 = cropped[:, :, 3]
+    row_has_content = (a2 > 0.04).sum(axis=1)
+    threshold = a2.shape[1] * 0.005
+    gap_start = None
+    for i, s in enumerate(row_has_content):
+        if s < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None:
+                gap_h = i - gap_start
+                # Un vrai espace de séparation : assez haut, et pas collé au
+                # tout début (sinon on risque de couper le blason lui même).
+                if gap_h > h * 0.015 and gap_start > h * 0.25:
+                    cropped = cropped[:gap_start, :, :]
+                    a3 = cropped[:, :, 3]
+                    ys2, xs2 = np.where(a3 > 0.04)
+                    if len(xs2):
+                        xx0, xx1, yy0, yy1 = xs2.min(), xs2.max(), ys2.min(), ys2.max()
+                        cropped = cropped[yy0:yy1 + 1, xx0:xx1 + 1]
+                    return cropped
+            gap_start = None
+    return cropped
+
+
+def _fit_text(ax, x, y, text, fontsize, max_width_in, fontproperties, color,
+              ha="center", va="center", min_fontsize=8.5):
+    """
+    Dessine un texte et, s'il dépasse la largeur disponible (mesurée sur le
+    vrai rendu, pas estimée), réduit automatiquement sa taille pour qu'il
+    tienne. Remplace les tailles fixes qui cassent selon la longueur réelle
+    des noms d'un match à l'autre.
+    """
+    fig = ax.figure
+    t = ax.text(x, y, text, ha=ha, va=va, fontsize=fontsize,
+                fontproperties=fontproperties, color=color)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    width_in = t.get_window_extent(renderer=renderer).width / fig.dpi
+    if width_in > max_width_in and width_in > 0:
+        new_fs = max(min_fontsize, fontsize * (max_width_in / width_in))
+        t.remove()
+        t = ax.text(x, y, text, ha=ha, va=va, fontsize=new_fs,
+                    fontproperties=fontproperties, color=color)
+    return t
+
 LOGO_MAP = {
     "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "BES": "BJK.png", "DUB": "DUB.png",
     "HTA": "HTA.png", "IST": "EFS.png", "MAD": "RMD.png", "MCO": "ASM.png",
@@ -106,19 +171,18 @@ def _qt_bounds(ps):
 
 
 def _draw_team(ax, code, name, x_center):
-    """Logos agrandis pour peser autant visuellement que le logo ELSTATSLAB du titre."""
-    base_w, base_h = 0.22, 0.80
-    zoom = _logo_zoom(code)
-    w = base_w * zoom
-    h = base_h * zoom
-    w = min(w, 0.30)
-    h = min(h, 1.10)
+    """Logo recadré automatiquement sur son contenu réel (voir _autocrop_logo),
+    donc plus besoin de facteur de zoom manuel par équipe : chaque logo est
+    normalisé à la même taille de base, peu importe la marge du fichier source."""
+    base_w, base_h = 0.24, 0.85
     logo_y = 0.60
     lp = _logo_path(code)
     if lp:
         img = plt.imread(str(lp))
-        # Nettoyage alpha : compositer sur fond blanc pour éliminer le bruit
+        w, h = base_w, base_h
         if img.ndim == 3 and img.shape[2] == 4:
+            img = _autocrop_logo(img)
+            # Nettoyage alpha : compositer sur fond blanc pour éliminer le bruit
             alpha = img[:, :, 3:4]
             rgb = img[:, :, :3]
             white = np.ones_like(rgb)
@@ -266,8 +330,8 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
 
             ax_r.text(1.1, y, f"{code} +{r['pts']}", ha="left", va="center",
                       fontsize=run_fs + 2.5, fontproperties=BARLOW_BOLD, color=c)
-            ax_r.text(9.1, y, detail, ha="right", va="center",
-                      fontsize=run_fs + 1.5, fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a")
+            _fit_text(ax_r, 9.1, y, detail, fontsize=run_fs + 1.5, max_width_in=6.0,
+                      fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a", ha="right", va="center")
         ax_r.text(5, 0.3, "A run is a streak of points scored without the opponent scoring.",
                   ha="center", va="center", fontsize=8, fontproperties=BARLOW_REGULAR,
                   color=COLOR_SUBTLE, style="italic")
@@ -303,10 +367,12 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
         ax_b.text(xp, 5.5, f"{lu['pts_for']}-{lu['pts_against']}   ·   NetRtg {lu['net_rtg']:+.1f}   ·   {lu['min']}",
                   ha="center", va="center", fontsize=best5_stat_fs, fontproperties=BARLOW_SEMIBOLD, color=COLOR_TEXT)
 
-        # 5 joueurs sur une seule ligne, en gras noir pour un repérage rapide
-        # (mesuré : tient largement dans la carte même avec un nom composé long)
-        ax_b.text(xp, 2.7, "  ·  ".join(lu["players"]), ha="center", va="center",
-                  fontsize=best5_players_fs + 1, fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a")
+        # 5 joueurs sur une seule ligne : taille mesurée sur le vrai rendu,
+        # réduite automatiquement si la liste est trop longue pour la carte
+        # (plutôt qu'une taille fixe qui déborde selon les noms du match).
+        _fit_text(ax_b, xp, 2.7, "  ·  ".join(lu["players"]),
+                  fontsize=best5_players_fs + 1, max_width_in=4.1,
+                  fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a", ha="center", va="center")
 
 # ─── Footer ────────────────────────────────────────────────────────────
     ax_f = fig.add_subplot(gs[5])
