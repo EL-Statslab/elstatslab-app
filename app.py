@@ -1273,7 +1273,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     is_postseason_png = round_ in ("PO", "FF", "PI")
 
     def draw_team_block(code, name, rank, wl, form, x_center):
-        base_w, base_h = 0.20, 0.72
+        base_w, base_h = 0.15, 0.48
         logo_y = 0.55
         lp = logo_path(code)
         if lp:
@@ -1341,9 +1341,9 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         ax.axis("off")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
-        ax.text(0.5, 0.97, title, ha="center", va="top",
-                fontsize=14, fontproperties=BARLOW_BOLD)
         col_x = {"home": 0.17, "metric": 0.44, "away": 0.71, "delta": 0.91}
+        ax.text(col_x["metric"], 0.97, title, ha="center", va="top",
+                fontsize=14, fontproperties=BARLOW_BOLD)
         header_y = 0.88
         ax.text(col_x["home"],   header_y, home_name,
                 ha="center", va="center", fontsize=9.5,
@@ -1396,7 +1396,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                     fontsize=12, fontproperties=BARLOW_BOLD)
             delta_s = f"{hv - av:+.1f}" if (hv is not None and av is not None) else ""
             ax.text(col_x["delta"], y, delta_s, ha="center", va="center",
-                    fontsize=9, fontproperties=BARLOW_REGULAR, color="#888888")
+                    fontsize=10.5, fontproperties=BARLOW_SEMIBOLD, color="#555555")
 
     ax_season = fig.add_subplot(gs[2, 0])
     draw_table(ax_season, "Season", h_season, a_season, home_name, away_name)
