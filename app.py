@@ -1677,11 +1677,12 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         score = r["impact_score"]
         score_str = f"{score:+.2f}" if score >= 0 else f"{score:.2f}"
 
-        # Fond de carte header (agrandi pour laisser respirer nom/joueur/badges)
+        # Fond de carte header (un peu resserré, bleu marine plus dense)
+        HEADER_BG = "#121220"
         header_bg = plt.matplotlib.patches.FancyBboxPatch(
-            (0.01, 0.76), 0.98, 0.23,
+            (0.01, 0.80), 0.98, 0.19,
             boxstyle="round,pad=0.01",
-            facecolor="#1a1a2e", edgecolor="none",
+            facecolor=HEADER_BG, edgecolor="none",
         )
         ax.add_patch(header_bg)
 
@@ -1689,39 +1690,40 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         lp = logo_path(code)
         if lp:
             zoom = logo_zoom(code)
-            lw = min(0.11 * zoom, 0.15)
-            lh = min(0.20 * zoom, 0.27)
-            logo_ax = ax.inset_axes([0.02, 0.785, lw, lh])
+            lw = min(0.10 * zoom, 0.14)
+            lh = min(0.17 * zoom, 0.22)
+            logo_cy = 0.895  # centre vertical fixe, commun à tous les logos
+            logo_ax = ax.inset_axes([0.02, logo_cy - lh / 2, lw, lh])
             img = plt.imread(str(lp))
             if img.ndim == 3 and img.shape[2] == 4:
                 alpha = img[:, :, 3:4]
                 rgb = img[:, :, :3]
-                header_bg_rgb = np.array([26 / 255, 26 / 255, 46 / 255])
+                header_bg_rgb = np.array([18 / 255, 18 / 255, 32 / 255])
                 img = rgb * alpha + header_bg_rgb * (1 - alpha)
             logo_ax.imshow(img, interpolation="lanczos")
             logo_ax.axis("off")
 
         # Nom équipe
-        ax.text(0.22, 0.955, disp.upper(), ha="left", va="center",
+        ax.text(0.22, 0.96, disp.upper(), ha="left", va="center",
                 fontsize=8.5, color="#aaaacc",
                 fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
-        # Nom joueur (plus d'écart avec le nom d'équipe au dessus)
-        ax.text(0.22, 0.865, r["player_name"].upper(), ha="left", va="center",
+        # Nom joueur
+        ax.text(0.22, 0.885, r["player_name"].upper(), ha="left", va="center",
                 fontsize=16, color="#ffffff",
                 fontproperties=BARLOW_BOLD, transform=ax.transAxes)
 
-        # Badges (écartés aux deux extrémités plutôt que collés l'un à l'autre)
-        ax.text(0.22, 0.79, "DIFFERENCE MAKER", ha="left", va="center",
+        # Badges
+        ax.text(0.22, 0.825, "DIFFERENCE MAKER", ha="left", va="center",
                 fontsize=8, color="#ffd700",
                 fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
-        ax.text(0.95, 0.79, f"Impact Pulse · Score {score_str}", ha="right", va="center",
+        ax.text(0.95, 0.825, f"Impact Pulse · Score {score_str}", ha="right", va="center",
                 fontsize=8, color="#64ffb4",
                 fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
-        # Fond clair pour le tableau (remonté pour laisser l'air au header agrandi)
+        # Fond clair pour le tableau (remonté puisque le header est moins haut)
         table_bg = plt.matplotlib.patches.FancyBboxPatch(
-            (0.01, 0.01), 0.98, 0.73,
+            (0.01, 0.01), 0.98, 0.77,
             boxstyle="round,pad=0.01",
             facecolor="#f8f9fa", edgecolor="#dee2e6", linewidth=0.8,
         )
@@ -1730,14 +1732,14 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         # En-têtes colonnes
         col_x = [0.15, 0.40, 0.62, 0.84]
         for cx, hdr in zip(col_x, ["Metric", "ON", "OFF", "Δ"]):
-            ax.text(cx, 0.695, hdr, ha="center", va="center",
+            ax.text(cx, 0.72, hdr, ha="center", va="center",
                     fontsize=9, color="#555555",
                     fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
-        ax.axhline(0.665, xmin=0.03, xmax=0.97, color="#dee2e6", linewidth=0.8)
+        ax.axhline(0.69, xmin=0.03, xmax=0.97, color="#dee2e6", linewidth=0.8)
 
         row_h = 0.123
-        y_start = 0.60
+        y_start = 0.625
 
         for i, m in enumerate(IP_EXPORT_METRICS):
             y = y_start - i * row_h
