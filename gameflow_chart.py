@@ -236,7 +236,7 @@ def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspe
     ax_title.axis("off"); ax_title.set_xlim(0, 1); ax_title.set_ylim(0, 1)
 
     if ELSTATSLAB_LOGO.exists():
-        brand_ax = ax_title.inset_axes([0.0, -0.3, 0.16, 1.6])
+        brand_ax = ax_title.inset_axes([-0.05, -0.3, 0.16, 1.6])
         brand_ax.imshow(plt.imread(str(ELSTATSLAB_LOGO)), interpolation="lanczos")
         brand_ax.axis("off")
     if EUROLEAGUE_LOGO.exists():
