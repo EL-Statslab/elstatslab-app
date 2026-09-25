@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from matplotlib.gridspec import GridSpec
+from matplotlib import font_manager
 from PIL import Image
 
 from gameflow_chart import render_gameflow_png
@@ -45,6 +46,23 @@ ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
 CURRENT_SEASON = 2025
 ROLLING_WINDOW = 5
+
+# Brand typeface for exported PNGs (Barlow Condensed, matches the X banner).
+# Drop the .ttf files in a "fonts" folder next to app.py; falls back to a
+# plain bold sans-serif automatically if they are not present.
+FONTS_DIR = Path("fonts")
+
+
+def _brand_font(filename: str, fallback_weight: str = "bold") -> font_manager.FontProperties:
+    fp = FONTS_DIR / filename
+    if fp.exists():
+        return font_manager.FontProperties(fname=str(fp))
+    return font_manager.FontProperties(weight=fallback_weight)
+
+
+BARLOW_BOLD     = _brand_font("BarlowCondensed-Bold.ttf", "bold")
+BARLOW_SEMIBOLD = _brand_font("BarlowCondensed-SemiBold.ttf", "semibold")
+BARLOW_REGULAR  = _brand_font("BarlowCondensed-Regular.ttf", "regular")
 
 st.set_page_config(
     page_title="ELSTATSLAB Match Center",
@@ -1358,14 +1376,14 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_foot.set_xlim(0, 1)
     ax_foot.set_ylim(0, 1)
     ax_foot.text(0.47, 0.64, "DataViz By EL_STATSLAB", ha="right", va="center",
-                 fontsize=15, fontweight="bold", color="#1a1a1a")
+                 fontsize=15, fontproperties=BARLOW_BOLD, color="#1a1a1a")
     ax_foot.text(0.5, 0.64, "·", ha="center", va="center",
                  fontsize=15, color="#bbbbbb")
     ax_foot.text(0.53, 0.64, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
-                 fontsize=10.5, fontweight="bold", color="#e8491c")
+                 fontsize=10.5, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
     ax_foot.text(0.5, 0.24, "𝕏 @EL_Statslab   ·   elstatslab.com",
                  ha="center", va="center", fontsize=10.5,
-                 color="#888888")
+                 fontproperties=BARLOW_REGULAR, color="#888888")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120)
@@ -1476,7 +1494,7 @@ def render_impact_pulse_section(gamecode: int, season: int,
                     f"<span style='background:#e8f5e9;border:1px solid #2ea043;"
                     f"color:#2e7d32;font-size:0.6rem;font-weight:700;letter-spacing:0.1em;"
                     f"padding:2px 8px;border-radius:20px;'>"
-                    f"Score {score_str}</span>"
+                    f"Impact Pulse · Score {score_str}</span>"
                     f"</div>"
                     f"<div style='font-size:0.65rem;color:#aaaaaa;margin-top:6px;'>"
                     f"{int(r['on_poss'])} poss ON · min. threshold 12 poss</div>"
@@ -1632,12 +1650,12 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
         el_ax.axis("off")
 
-    ax_title.text(0.50, 0.65, f"⚡ Impact Pulse  |  EuroLeague {round_label}",
-                  ha="center", va="center", fontsize=20, fontweight="bold",
-                  color="#1a1a1a")
-    ax_title.text(0.50, 0.15, "Who moved the needle?  —  Impact Score: proprietary On/Off composite metric",
+    ax_title.text(0.50, 0.65, f"Impact Pulse  |  EuroLeague {round_label}",
+                  ha="center", va="center", fontsize=18,
+                  fontproperties=BARLOW_BOLD, color="#1a1a1a")
+    ax_title.text(0.50, 0.15, "Who moved the needle?  ·  Impact Score: proprietary On/Off composite metric",
                   ha="center", va="center", fontsize=10,
-                  color="#888888", style="italic")
+                  fontproperties=BARLOW_REGULAR, color="#888888", style="italic")
 
     # ── Panel par équipe ────────────────────────────────────────────────
     for col_idx, (code, disp) in enumerate(
@@ -1659,9 +1677,9 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         score = r["impact_score"]
         score_str = f"{score:+.2f}" if score >= 0 else f"{score:.2f}"
 
-        # Fond de carte header
+        # Fond de carte header (agrandi pour laisser respirer nom/joueur/badges)
         header_bg = plt.matplotlib.patches.FancyBboxPatch(
-            (0.01, 0.82), 0.98, 0.17,
+            (0.01, 0.76), 0.98, 0.23,
             boxstyle="round,pad=0.01",
             facecolor="#1a1a2e", edgecolor="none",
         )
@@ -1671,38 +1689,39 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         lp = logo_path(code)
         if lp:
             zoom = logo_zoom(code)
-            lw = min(0.10 * zoom, 0.15)
-            lh = min(0.22 * zoom, 0.30)
-            logo_ax = ax.inset_axes([0.02, 0.84, lw, lh])
+            lw = min(0.11 * zoom, 0.15)
+            lh = min(0.20 * zoom, 0.27)
+            logo_ax = ax.inset_axes([0.02, 0.785, lw, lh])
             img = plt.imread(str(lp))
             if img.ndim == 3 and img.shape[2] == 4:
                 alpha = img[:, :, 3:4]
                 rgb = img[:, :, :3]
-                img = rgb * alpha + np.ones_like(rgb) * (1 - alpha)
+                header_bg_rgb = np.array([26 / 255, 26 / 255, 46 / 255])
+                img = rgb * alpha + header_bg_rgb * (1 - alpha)
             logo_ax.imshow(img, interpolation="lanczos")
             logo_ax.axis("off")
 
         # Nom équipe
-        ax.text(0.22, 0.96, disp.upper(), ha="left", va="center",
-                fontsize=8, color="rgba(255,255,255,0.6)" if False else "#aaaacc",
-                fontweight="bold", transform=ax.transAxes)
+        ax.text(0.22, 0.955, disp.upper(), ha="left", va="center",
+                fontsize=8.5, color="#aaaacc",
+                fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
-        # Nom joueur
-        ax.text(0.22, 0.88, r["player_name"].upper(), ha="left", va="center",
-                fontsize=14, color="#ffffff", fontweight="bold",
-                transform=ax.transAxes)
+        # Nom joueur (plus d'écart avec le nom d'équipe au dessus)
+        ax.text(0.22, 0.865, r["player_name"].upper(), ha="left", va="center",
+                fontsize=16, color="#ffffff",
+                fontproperties=BARLOW_BOLD, transform=ax.transAxes)
 
-        # Badges
-        ax.text(0.22, 0.84, f"DIFFERENCE MAKER", ha="left", va="center",
-                fontsize=7.5, color="#ffd700", fontweight="bold",
-                transform=ax.transAxes)
-        ax.text(0.65, 0.84, f"Score {score_str}", ha="left", va="center",
-                fontsize=7.5, color="#64ffb4", fontweight="bold",
-                transform=ax.transAxes)
+        # Badges (écartés aux deux extrémités plutôt que collés l'un à l'autre)
+        ax.text(0.22, 0.79, "DIFFERENCE MAKER", ha="left", va="center",
+                fontsize=8, color="#ffd700",
+                fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
+        ax.text(0.95, 0.79, f"Impact Pulse · Score {score_str}", ha="right", va="center",
+                fontsize=8, color="#64ffb4",
+                fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
-        # Fond clair pour le tableau
+        # Fond clair pour le tableau (remonté pour laisser l'air au header agrandi)
         table_bg = plt.matplotlib.patches.FancyBboxPatch(
-            (0.01, 0.01), 0.98, 0.80,
+            (0.01, 0.01), 0.98, 0.73,
             boxstyle="round,pad=0.01",
             facecolor="#f8f9fa", edgecolor="#dee2e6", linewidth=0.8,
         )
@@ -1711,14 +1730,14 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         # En-têtes colonnes
         col_x = [0.15, 0.40, 0.62, 0.84]
         for cx, hdr in zip(col_x, ["Metric", "ON", "OFF", "Δ"]):
-            ax.text(cx, 0.76, hdr, ha="center", va="center",
-                    fontsize=9, color="#555555", fontweight="bold",
-                    transform=ax.transAxes)
+            ax.text(cx, 0.695, hdr, ha="center", va="center",
+                    fontsize=9, color="#555555",
+                    fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
-        ax.axhline(0.73, xmin=0.03, xmax=0.97, color="#dee2e6", linewidth=0.8)
+        ax.axhline(0.665, xmin=0.03, xmax=0.97, color="#dee2e6", linewidth=0.8)
 
-        row_h = 0.128
-        y_start = 0.665
+        row_h = 0.123
+        y_start = 0.60
 
         for i, m in enumerate(IP_EXPORT_METRICS):
             y = y_start - i * row_h
@@ -1734,32 +1753,46 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
                 good = delta >= 0.3
                 bad  = delta <= -0.3
 
-            row_bg = "#e8f5e9" if good else ("#ffebee" if bad else "#ffffff")
-            bg_rect = plt.matplotlib.patches.FancyBboxPatch(
-                (0.03, y - row_h * 0.44), 0.94, row_h * 0.85,
-                boxstyle="round,pad=0.005",
-                facecolor=row_bg, edgecolor="none",
+            # Zébrage neutre (gris très clair) au lieu d'un fond vert plein,
+            # pour que le vert/rouge du delta reste le seul signal de couleur.
+            if i % 2 == 1:
+                stripe = plt.matplotlib.patches.FancyBboxPatch(
+                    (0.03, y - row_h * 0.44), 0.94, row_h * 0.85,
+                    boxstyle="round,pad=0.005",
+                    facecolor="#f0f1f3", edgecolor="none",
+                    transform=ax.transAxes,
+                )
+                ax.add_patch(stripe)
+
+            accent_color = "#2e7d32" if good else ("#c62828" if bad else "#cccccc")
+            accent_bar = plt.matplotlib.patches.FancyBboxPatch(
+                (0.03, y - row_h * 0.40), 0.012, row_h * 0.78,
+                boxstyle="round,pad=0.002",
+                facecolor=accent_color, edgecolor="none",
                 transform=ax.transAxes,
             )
-            ax.add_patch(bg_rect)
+            ax.add_patch(accent_bar)
 
             delta_color = "#2e7d32" if good else ("#c62828" if bad else "#888888")
             delta_str = f"{delta:+.1f}"
 
             ax.text(col_x[0], y, m, ha="center", va="center",
-                    fontsize=10, color="#444444", transform=ax.transAxes)
+                    fontsize=10, color="#444444",
+                    fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
             ax.text(col_x[1], y, f"{on_val:.1f}", ha="center", va="center",
-                    fontsize=11, color="#1a1a1a", fontweight="bold",
-                    transform=ax.transAxes)
+                    fontsize=12, color="#1a1a1a",
+                    fontproperties=BARLOW_BOLD, transform=ax.transAxes)
             ax.text(col_x[2], y, f"{off_val:.1f}", ha="center", va="center",
-                    fontsize=10, color="#777777", transform=ax.transAxes)
+                    fontsize=10, color="#777777",
+                    fontproperties=BARLOW_REGULAR, transform=ax.transAxes)
             ax.text(col_x[3], y, delta_str, ha="center", va="center",
-                    fontsize=11, color=delta_color, fontweight="bold",
-                    transform=ax.transAxes)
+                    fontsize=12, color=delta_color,
+                    fontproperties=BARLOW_BOLD, transform=ax.transAxes)
 
-        ax.text(0.50, 0.04, "Min. threshold: 12 poss/game",
+        ax.text(0.50, 0.045, "Min. threshold: 12 poss/game",
                 ha="center", va="center", fontsize=7.5,
-                color="#aaaaaa", style="italic", transform=ax.transAxes)
+                fontproperties=BARLOW_REGULAR, color="#aaaaaa", style="italic",
+                transform=ax.transAxes)
 
     # ── Footer ──────────────────────────────────────────────────────────
     ax_foot = fig.add_subplot(gs[2, :])
@@ -1767,14 +1800,14 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
     ax_foot.set_xlim(0, 1)
     ax_foot.set_ylim(0, 1)
     ax_foot.text(0.47, 0.66, "DataViz By EL_STATSLAB", ha="right", va="center",
-                 fontsize=15, fontweight="bold", color="#1a1a1a")
+                 fontsize=15, fontproperties=BARLOW_BOLD, color="#1a1a1a")
     ax_foot.text(0.5, 0.66, "·", ha="center", va="center",
                  fontsize=15, color="#bbbbbb")
     ax_foot.text(0.53, 0.66, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
-                 fontsize=10.5, fontweight="bold", color="#e8491c")
+                 fontsize=10.5, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
     ax_foot.text(0.5, 0.26, "𝕏 @EL_Statslab   ·   elstatslab.com",
                  ha="center", va="center", fontsize=10.5,
-                 color="#888888")
+                 fontproperties=BARLOW_REGULAR, color="#888888")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120, bbox_inches="tight")
