@@ -144,9 +144,10 @@ def logo_b64(code: str) -> str | None:
 # GAMEFLOW
 # =============================================================================
 @st.cache_data(ttl=3600)
-def get_gameflow_png(gamecode: int, season: int, aspect: str = "square") -> bytes | None:
+def get_gameflow_png(gamecode: int, season: int, round_label: str = "",
+                     aspect: str = "square") -> bytes | None:
     try:
-        return render_gameflow_png(gamecode, season, aspect=aspect)
+        return render_gameflow_png(gamecode, season, round_label=round_label, aspect=aspect)
     except Exception:
         return None
 
@@ -1946,7 +1947,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         else:
             gc_num = int(raw_gc)
 
-        gf_png = get_gameflow_png(gc_num, rnd_season, aspect="square")
+        gf_png = get_gameflow_png(gc_num, rnd_season, round_label=round_label_long, aspect="square")
         if gf_png is not None:
             st.divider()
             with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
