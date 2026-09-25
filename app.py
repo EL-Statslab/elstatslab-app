@@ -140,6 +140,45 @@ def logo_b64(code: str) -> str | None:
         return base64.b64encode(f.read()).decode()
 
 
+def _autocrop_logo(img_arr):
+    """
+    Recadre une image RGBA (format retourné par plt.imread, flottant 0-1) sur
+    son contenu réel : coupe la marge transparente, et si un bloc secondaire
+    (sponsor, texte) est séparé du dessin principal par un vrai espace vide,
+    ne garde que le premier bloc. Même logique que gameflow_chart.py, pour
+    que les logos aient un poids visuel cohérent sans réglage par équipe.
+    """
+    alpha = img_arr[:, :, 3]
+    ys, xs = np.where(alpha > 0.04)
+    if len(xs) == 0:
+        return img_arr
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    cropped = img_arr[y0:y1 + 1, x0:x1 + 1]
+
+    h = cropped.shape[0]
+    a2 = cropped[:, :, 3]
+    row_has_content = (a2 > 0.04).sum(axis=1)
+    threshold = a2.shape[1] * 0.005
+    gap_start = None
+    for i, s in enumerate(row_has_content):
+        if s < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None:
+                gap_h = i - gap_start
+                if gap_h > h * 0.015 and gap_start > h * 0.25:
+                    cropped = cropped[:gap_start, :, :]
+                    a3 = cropped[:, :, 3]
+                    ys2, xs2 = np.where(a3 > 0.04)
+                    if len(xs2):
+                        xx0, xx1, yy0, yy1 = xs2.min(), xs2.max(), ys2.min(), ys2.max()
+                        cropped = cropped[yy0:yy1 + 1, xx0:xx1 + 1]
+                    return cropped
+            gap_start = None
+    return cropped
+
+
 # =============================================================================
 # GAMEFLOW
 # =============================================================================
@@ -1224,7 +1263,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
         el_ax.axis("off")
     ax_title.text(0.5, 0.5, f"EuroLeague {round_label}",
-                  ha="center", va="center", fontsize=22, fontweight="bold")
+                  ha="center", va="center", fontsize=22, fontproperties=BARLOW_BOLD)
 
     ax_head = fig.add_subplot(gs[1, :])
     ax_head.axis("off")
@@ -1234,23 +1273,29 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     is_postseason_png = round_ in ("PO", "FF", "PI")
 
     def draw_team_block(code, name, rank, wl, form, x_center):
-        base_w, base_h = 0.18, 0.55
-        zoom = logo_zoom(code)
-        w = min(base_w * zoom, 0.28)
-        h = min(base_h * zoom, 0.85)
+        base_w, base_h = 0.20, 0.72
         logo_y = 0.55
         lp = logo_path(code)
         if lp:
+            img = plt.imread(str(lp))
+            if img.ndim == 3 and img.shape[2] == 4:
+                img = _autocrop_logo(img)
+                alpha = img[:, :, 3:4]
+                rgb = img[:, :, :3]
+                white = np.ones_like(rgb)
+                img = rgb * alpha + white * (1 - alpha)
+            w, h = base_w, base_h
             logo_ax = ax_head.inset_axes(
                 [x_center - w / 2, logo_y - h / 2 + 0.15, w, h]
             )
-            logo_ax.imshow(plt.imread(str(lp)))
+            logo_ax.imshow(img, interpolation="lanczos")
             logo_ax.axis("off")
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
-                     fontsize=14, fontweight="bold")
+                     fontsize=14, fontproperties=BARLOW_BOLD)
         if not is_postseason_png:
             ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
-                         ha="center", va="top", fontsize=11, color="#555555")
+                         ha="center", va="top", fontsize=11,
+                         fontproperties=BARLOW_REGULAR, color="#555555")
         if form:
             n = len(form)
             sq = 0.022
@@ -1281,33 +1326,37 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         hw_col = EL_GREEN if hw > aw else (EL_RED if hw < aw else "#1a1a1a")
         aw_col = EL_GREEN if aw > hw else (EL_RED if aw < hw else "#1a1a1a")
         ax_head.text(0.5, 0.65, "Series", ha="center", va="center",
-                     fontsize=12, color="#555555")
+                     fontsize=12, fontproperties=BARLOW_REGULAR, color="#555555")
         ax_head.text(0.44, 0.48, str(hw), ha="center", va="center",
-                     fontsize=36, fontweight="bold", color=hw_col)
+                     fontsize=36, fontproperties=BARLOW_BOLD, color=hw_col)
         ax_head.text(0.5, 0.48, "-", ha="center", va="center",
                      fontsize=28, color="#aaaaaa")
         ax_head.text(0.56, 0.48, str(aw), ha="center", va="center",
-                     fontsize=36, fontweight="bold", color=aw_col)
+                     fontsize=36, fontproperties=BARLOW_BOLD, color=aw_col)
     else:
         ax_head.text(0.5, 0.55, "VS", ha="center", va="center",
-                     fontsize=34, fontweight="bold")
+                     fontsize=34, fontproperties=BARLOW_BOLD)
 
     def draw_table(ax, title, h_stats, a_stats, home_name, away_name):
         ax.axis("off")
         ax.set_xlim(0, 1)
         ax.set_ylim(0, 1)
         ax.text(0.5, 0.97, title, ha="center", va="top",
-                fontsize=14, fontweight="bold")
-        col_x = {"home": 0.22, "metric": 0.5, "away": 0.78}
+                fontsize=14, fontproperties=BARLOW_BOLD)
+        col_x = {"home": 0.17, "metric": 0.44, "away": 0.71, "delta": 0.91}
         header_y = 0.88
         ax.text(col_x["home"],   header_y, home_name,
-                ha="center", va="center", fontsize=10,
-                color="#444444", fontweight="bold")
+                ha="center", va="center", fontsize=9.5,
+                fontproperties=BARLOW_BOLD, color="#444444")
         ax.text(col_x["metric"], header_y, "Metric",
-                ha="center", va="center", fontsize=10, color="#444444")
-        ax.text(col_x["away"],   header_y, away_name,
                 ha="center", va="center", fontsize=10,
-                color="#444444", fontweight="bold")
+                fontproperties=BARLOW_REGULAR, color="#444444")
+        ax.text(col_x["away"],   header_y, away_name,
+                ha="center", va="center", fontsize=9.5,
+                fontproperties=BARLOW_BOLD, color="#444444")
+        ax.text(col_x["delta"], header_y, "\u0394",
+                ha="center", va="center", fontsize=10,
+                fontproperties=BARLOW_REGULAR, color="#444444")
         row_h = 0.105
         top_y = 0.78
         for i, m in enumerate(METRICS):
@@ -1315,7 +1364,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             hv = h_stats.get(m)
             av = a_stats.get(m)
             h_int, a_int = colour_intensity(hv, av, m)
-            cell_w = 0.22
+            cell_w = 0.19
             cell_h = row_h * 0.85
             for side, intensity, cx in [
                 ("home", h_int, col_x["home"]),
@@ -1330,8 +1379,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                 )
                 ax.add_patch(rect)
             rect_m = plt.Rectangle(
-                (col_x["metric"] - 0.1, y - cell_h / 2),
-                0.2, cell_h,
+                (col_x["metric"] - 0.09, y - cell_h / 2),
+                0.18, cell_h,
                 facecolor="#f5f5f5",
                 edgecolor="#e0e0e0",
                 linewidth=0.5,
@@ -1340,11 +1389,14 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             hv_s = f"{hv:.1f}" if hv is not None else "-"
             av_s = f"{av:.1f}" if av is not None else "-"
             ax.text(col_x["home"], y, hv_s, ha="center", va="center",
-                    fontsize=12, fontweight="bold")
+                    fontsize=12, fontproperties=BARLOW_BOLD)
             ax.text(col_x["metric"], y, m, ha="center", va="center",
-                    fontsize=11)
+                    fontsize=10.5, fontproperties=BARLOW_REGULAR)
             ax.text(col_x["away"], y, av_s, ha="center", va="center",
-                    fontsize=12, fontweight="bold")
+                    fontsize=12, fontproperties=BARLOW_BOLD)
+            delta_s = f"{hv - av:+.1f}" if (hv is not None and av is not None) else ""
+            ax.text(col_x["delta"], y, delta_s, ha="center", va="center",
+                    fontsize=9, fontproperties=BARLOW_REGULAR, color="#888888")
 
     ax_season = fig.add_subplot(gs[2, 0])
     draw_table(ax_season, "Season", h_season, a_season, home_name, away_name)
@@ -1361,7 +1413,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         if round_ == "FF":
             prob_label += " (neutral court)"
         ax_prob.text(0.5, 0.9, prob_label,
-                     ha="center", va="center", fontsize=13, fontweight="bold")
+                     ha="center", va="center", fontsize=13, fontproperties=BARLOW_BOLD)
         bar_y = 0.35
         bar_h = 0.3
         ax_prob.add_patch(plt.Rectangle(
@@ -1371,9 +1423,9 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             (0.1 + 0.8 * home_prob, bar_y), 0.8 * away_prob, bar_h,
             facecolor=EL_RED, edgecolor="none"))
         ax_prob.text(0.1, bar_y - 0.12, f"{home_name}  {home_prob*100:.1f}%",
-                     ha="left", va="top", fontsize=11, fontweight="bold")
+                     ha="left", va="top", fontsize=11, fontproperties=BARLOW_BOLD)
         ax_prob.text(0.9, bar_y - 0.12, f"{away_prob*100:.1f}%  {away_name}",
-                     ha="right", va="top", fontsize=11, fontweight="bold")
+                     ha="right", va="top", fontsize=11, fontproperties=BARLOW_BOLD)
 
     ax_foot = fig.add_subplot(gs[4, :])
     ax_foot.axis("off")
