@@ -601,12 +601,13 @@ def _serie_prob_weight(serie_scores: list) -> tuple:
     return prob, weight_map.get(n, 0.55)
 
 
-def _get_match_context(conn, gamecode: int) -> Optional[dict]:
+def _get_match_context(conn, gamecode: int, season: int) -> Optional[dict]:
     row = conn.execute("""
         SELECT Season, round, hometeam, awayteam, homecode, awaycode
         FROM schedule
-        WHERE CAST(SUBSTR(gamecode, INSTR(gamecode, '_') + 1) AS INTEGER) = ?
-    """, (gamecode,)).fetchone()
+        WHERE Season = ?
+          AND CAST(SUBSTR(gamecode, INSTR(gamecode, '_') + 1) AS INTEGER) = ?
+    """, (season, gamecode)).fetchone()
 
     if not row:
         return None
@@ -786,12 +787,12 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
 
 
 @st.cache_data(ttl=300)
-def predict_by_gamecode(gamecode: int) -> dict:
+def predict_by_gamecode(gamecode: int, season: int) -> dict:
     conn = get_conn()
-    ctx = _get_match_context(conn, gamecode)
+    ctx = _get_match_context(conn, gamecode, season)
     if not ctx:
         return {"home_prob": 0.5, "away_prob": 0.5,
-                "error": f"Gamecode {gamecode} introuvable"}
+                "error": f"Gamecode {gamecode} introuvable pour la saison {season}"}
     return _monte_carlo_win_prob(conn, ctx)
 
 
@@ -1226,7 +1227,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         ax_head.text(x_center, 0.32, name, ha="center", va="top",
                      fontsize=14, fontweight="bold")
         if not is_postseason_png:
-            ax_head.text(x_center, 0.20, wl,
+            ax_head.text(x_center, 0.20, f"#{rank} · {wl}",
                          ha="center", va="top", fontsize=11, color="#555555")
         if form:
             n = len(form)
@@ -1925,7 +1926,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     else:
         gc_num = int(raw_gc)
 
-    pred = predict_by_gamecode(gc_num)
+    pred = predict_by_gamecode(gc_num, rnd_season)
 
     if not played:
         if "error" in pred:
