@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib import font_manager
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import numpy as np
 
 APP_ROOT  = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP")
@@ -95,8 +96,9 @@ def _fit_text(ax, x, y, text, fontsize, max_width_in, fontproperties, color,
     fig = ax.figure
     t = ax.text(x, y, text, ha=ha, va=va, fontsize=fontsize,
                 fontproperties=fontproperties, color=color)
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    renderer = canvas.get_renderer()
     width_in = t.get_window_extent(renderer=renderer).width / fig.dpi
     if width_in > max_width_in and width_in > 0:
         new_fs = max(min_fontsize, fontsize * (max_width_in / width_in))
