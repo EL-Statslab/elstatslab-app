@@ -26,6 +26,7 @@ from shared import (
     ROUND_LABELS,
     TEAM_DISPLAY_NAMES,
     ZOOM_CORRECTIONS,
+    get_season_team_codes,
     logo_b64,
     logo_zoom,
     read_sql,
@@ -57,15 +58,13 @@ _INVERTED_STATS = {"def_rtg", "tov_pct"}
 def render_logo(code: str, box_size: int, opacity: float = 1.0) -> None:
     b64 = logo_b64(code)
     if b64:
-        zoom = logo_zoom(code)
-        max_width = int(box_size * zoom)
         grayscale = "grayscale(70%)" if opacity < 1.0 else "none"
         st.markdown(
             f"""
             <div style="height:{box_size}px;display:flex;align-items:center;
                         justify-content:center;overflow:hidden;opacity:{opacity};">
                 <img src="data:image/png;base64,{b64}"
-                     style="max-height:{box_size}px;max-width:{max_width}px;
+                     style="max-height:{box_size}px;max-width:{box_size}px;
                             width:auto;height:auto;object-fit:contain;
                             filter:{grayscale};" />
             </div>
@@ -466,7 +465,7 @@ def render() -> None:
 
         return
 
-    codes = list(LOGO_MAP.keys())
+    codes = get_season_team_codes(season)
     n_cols = 4
     box_size = 90
     for row_start in range(0, len(codes), n_cols):
