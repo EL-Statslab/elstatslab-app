@@ -2146,8 +2146,35 @@ def render_match_center():
         .apply(lambda s: (s == "true").all())
         .to_dict()
     )
+    round_played_frac = (
+        full_sched.groupby("gameday")["played"]
+        .apply(lambda s: (s == "true").mean())
+        .to_dict()
+    )
     upcoming_rounds = [gd for gd in all_rounds_sorted if not round_status.get(gd, True)]
     current_round = upcoming_rounds[0] if upcoming_rounds else all_rounds_sorted[-1]
+
+    # La journée juste après celle en cours, si elle n'a pas encore démarré,
+    # reçoit le sablier ⏳ ; les autres suivent leur état réel (terminé/en cours).
+    next_not_started_round = None
+    try:
+        _idx = all_rounds_sorted.index(current_round)
+        if _idx + 1 < len(all_rounds_sorted):
+            _candidate = all_rounds_sorted[_idx + 1]
+            if round_played_frac.get(_candidate, 0.0) == 0.0:
+                next_not_started_round = _candidate
+    except ValueError:
+        pass
+
+    def _round_badge(gd: int) -> str:
+        frac = round_played_frac.get(gd, 0.0)
+        if frac >= 1.0:
+            return "✅"
+        if frac > 0.0:
+            return "🟡"
+        if gd == next_not_started_round:
+            return "⏳"
+        return ""
 
     postseason_rounds = [
         gd for gd in all_rounds_sorted
@@ -2175,7 +2202,11 @@ def render_match_center():
 
     st.markdown(f"### {section_title}")
 
-    short_labels = [round_labels[gd][0] for gd in selector_rounds]
+    short_labels = []
+    for gd in selector_rounds:
+        base_label = round_labels[gd][0]
+        badge = _round_badge(gd)
+        short_labels.append(f"{base_label} {badge}" if badge else base_label)
     label_to_round = dict(zip(short_labels, selector_rounds))
     try:
         default_index = selector_rounds.index(default_round)
