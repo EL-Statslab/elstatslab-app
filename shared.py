@@ -13,11 +13,14 @@ depuis n'importe quelle page.
 """
 
 import base64
+import io
 import sqlite3
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
+from PIL import Image
 
 # ============================================================
 # DB PATH — même logique de fallback que app.py
@@ -43,7 +46,7 @@ CURRENT_SEASON = AVAILABLE_SEASONS[0]   # conservé pour compat : = saison la pl
 # LOGO MAPPING
 # ============================================================
 LOGO_MAP = {
-    "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "DUB": "DUB.png",
+    "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "BES": "BJK.png", "DUB": "DUB.png",
     "HTA": "HTA.png", "IST": "EFS.png", "MAD": "RMD.png", "MCO": "ASM.png",
     "MIL": "AXM.png", "MUN": "BAY.png", "OLY": "OLY.png", "PAM": "VAL.png",
     "PAN": "PAO.png", "PAR": "PAR.png", "PRS": "PBB.png", "RED": "CZV.png",
@@ -56,7 +59,7 @@ ZOOM_CORRECTIONS = {
 }
 TEAM_DISPLAY_NAMES = {
     "ASV": "LDLC ASVEL Villeurbanne", "BAR": "FC Barcelona",
-    "BAS": "Baskonia Vitoria-Gasteiz", "DUB": "Dubai Basketball",
+    "BAS": "Baskonia Vitoria-Gasteiz", "BES": "Beşiktaş Istanbul", "DUB": "Dubai Basketball",
     "HTA": "Hapoel Tel Aviv", "IST": "Anadolu Efes Istanbul",
     "MAD": "Real Madrid", "MCO": "AS Monaco",
     "MIL": "EA7 Emporio Armani Milan", "MUN": "FC Bayern Munich",
@@ -90,13 +93,78 @@ def logo_path(code: str) -> Path | None:
     return p if p.exists() else None
 
 
+def _autocrop_logo_bytes(raw: bytes) -> bytes:
+    """
+    Recadre un PNG (bytes) sur son contenu réel : coupe la marge
+    transparente, et si un bloc secondaire (sponsor, texte) est séparé du
+    dessin principal par un vrai espace vide, ne garde que le premier bloc.
+    Même logique que gameflow_chart.py / app.py, adaptée en PIL puisque ce
+    module encode les logos en base64 pour de l'HTML plutôt que matplotlib.
+    """
+    img = Image.open(io.BytesIO(raw)).convert("RGBA")
+    arr = np.array(img)
+    alpha = arr[:, :, 3]
+    ys, xs = np.where(alpha > 10)
+    if len(xs) == 0:
+        return raw
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    cropped = arr[y0:y1 + 1, x0:x1 + 1]
+
+    h = cropped.shape[0]
+    a2 = cropped[:, :, 3]
+    row_has_content = (a2 > 10).sum(axis=1)
+    threshold = a2.shape[1] * 0.005
+    gap_start = None
+    for i, s in enumerate(row_has_content):
+        if s < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None:
+                gap_h = i - gap_start
+                if gap_h > h * 0.015 and gap_start > h * 0.25:
+                    cropped = cropped[:gap_start, :, :]
+                    a3 = cropped[:, :, 3]
+                    ys2, xs2 = np.where(a3 > 10)
+                    if len(xs2):
+                        xx0, xx1, yy0, yy1 = xs2.min(), xs2.max(), ys2.min(), ys2.max()
+                        cropped = cropped[yy0:yy1 + 1, xx0:xx1 + 1]
+                    break
+            gap_start = None
+
+    out = Image.fromarray(cropped)
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 @st.cache_data(ttl=3600)
 def logo_b64(code: str) -> str | None:
     lp = logo_path(code)
     if not lp:
         return None
     with open(lp, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+        raw = f.read()
+    try:
+        raw = _autocrop_logo_bytes(raw)
+    except Exception:
+        pass  # si le recadrage échoue pour une raison quelconque, on garde l'original
+    return base64.b64encode(raw).decode()
+
+
+@st.cache_data(ttl=600)
+def get_season_team_codes(season: int) -> list[str]:
+    """
+    Codes des équipes réellement présentes au calendrier de cette saison,
+    lu directement en base plutôt que depuis LOGO_MAP (qui restait figé
+    d'une saison à l'autre, ratant les remplacements comme Monaco -> Beşiktaş).
+    """
+    codes = read_sql(
+        "SELECT DISTINCT homecode AS code FROM schedule WHERE Season = ? "
+        "UNION SELECT DISTINCT awaycode AS code FROM schedule WHERE Season = ?",
+        (season, season),
+    )["code"].tolist()
+    return sorted(codes)
 
 
 # ============================================================
