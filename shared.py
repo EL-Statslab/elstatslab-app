@@ -36,7 +36,8 @@ else:
 LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
-CURRENT_SEASON = 2025
+AVAILABLE_SEASONS = [2026, 2025]   # la plus récente en premier
+CURRENT_SEASON = AVAILABLE_SEASONS[0]   # conservé pour compat : = saison la plus récente
 
 # ============================================================
 # LOGO MAPPING
