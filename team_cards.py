@@ -18,6 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from shared import (
+    AVAILABLE_SEASONS,
     CURRENT_SEASON,
     ELSTATSLAB_LOGO,
     LOGO_MAP,
@@ -323,8 +324,8 @@ def render_stat_row(label: str, value: float, pct: float, value_fmt: str) -> Non
 # ============================================================
 # FILTRES (barre horizontale sous le titre)
 # ============================================================
-def render_filters() -> tuple[str, str | None, int | None, int | None]:
-    available_rounds = get_available_rounds(CURRENT_SEASON)
+def render_filters(season: int) -> tuple[str, str | None, int | None, int | None]:
+    available_rounds = get_available_rounds(season)
 
     filter_cols = st.columns([2, 2, 2])
     with filter_cols[0]:
@@ -349,7 +350,7 @@ def render_filters() -> tuple[str, str | None, int | None, int | None]:
         return "round", "RS", None, None
 
     if rs_mode == "Single matchday":
-        gamedays = get_available_gamedays(CURRENT_SEASON)
+        gamedays = get_available_gamedays(season)
         if not gamedays:
             st.warning("No matchday data found.")
             return "round", "RS", None, None
@@ -360,7 +361,7 @@ def render_filters() -> tuple[str, str | None, int | None, int | None]:
             )
         return "day", None, gameday, None
 
-    max_gp = get_max_games_played(CURRENT_SEASON)
+    max_gp = get_max_games_played(season)
     with filter_cols[2]:
         n_games = st.number_input(
             "Number of games", min_value=1, max_value=max_gp, value=min(5, max_gp),
@@ -410,10 +411,16 @@ def render() -> None:
         st.title("ELSTATSLAB Team Cards")
         st.caption("Every EuroLeague team, benchmarked against the rest of the league.")
 
-    filter_type, round_code, gameday, n_games = render_filters()
+    season_col, _ = st.columns([1, 5])
+    with season_col:
+        season = st.selectbox(
+            "Season", options=AVAILABLE_SEASONS, index=0, key="tc_season_select",
+        )
+
+    filter_type, round_code, gameday, n_games = render_filters(season)
 
     df = load_team_percentiles(
-        CURRENT_SEASON, filter_type,
+        season, filter_type,
         round_code=round_code, gameday=gameday, n_games=n_games,
     )
 
