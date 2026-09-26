@@ -515,11 +515,26 @@ TEAM_NAME_MAP = {
     "Kosner Baskonia Vitoria-Gasteiz":  "Baskonia Vitoria-Gasteiz",
     "Crvena Zvezda mts Belgrade":       "Crvena Zvezda Meridianbet Belgrade",
     "AX Armani Exchange Milan":         "EA7 Emporio Armani Milan",
+    "Armani Olimpia Milan":             "EA7 Emporio Armani Milan",
     "Virtus Segafredo Bologna":         "Virtus Bologna",
     "Maccabi Rapyd Tel Aviv":           "Maccabi Playtika Tel Aviv",
     "Panathinaikos Athens":             "Panathinaikos AKTOR Athens",
     "Panathinaikos OPAP Athens":        "Panathinaikos AKTOR Athens",
+    "Fenerbahce Tarfin Istanbul":       "Fenerbahce Beko Istanbul",
 }
+
+
+def _resolve_team_name_fallback(name: str) -> str | None:
+    """Renvoie le nom alternatif connu pour cette équipe (changement de
+    sponsor d'une saison à l'autre), ou None si aucun mapping n'existe.
+    N'est utilisé qu'en repli, jamais à la place du nom d'origine."""
+    if not name:
+        return None
+    upper = name.strip().upper()
+    for k, v in TEAM_NAME_MAP.items():
+        if k.upper() == upper and v.upper() != upper:
+            return v
+    return None
 
 MC_MIN_H2H_GAMES  = 4
 MC_MIN_DIST_GAMES = 2
@@ -568,24 +583,40 @@ def _get_dist(conn, team_name: str, season: int,
           AND UPPER(t.TeamName) = UPPER(?)
           AND s.played = 'true'
     """
-    row = conn.execute(q, (season_min, season, team_name)).fetchone()
-    if row and row[7] and row[7] >= MC_MIN_DIST_GAMES:
-        keys = ["avg_pts", "std_pts", "avg_ortg", "avg_drtg",
-                "std_ortg", "std_drtg", "avg_pace", "games"]
-        return dict(zip(keys, row))
-    return None
+
+    def _run(name):
+        row = conn.execute(q, (season_min, season, name)).fetchone()
+        if row and row[7] and row[7] >= MC_MIN_DIST_GAMES:
+            keys = ["avg_pts", "std_pts", "avg_ortg", "avg_drtg",
+                    "std_ortg", "std_drtg", "avg_pace", "games"]
+            return dict(zip(keys, row))
+        return None
+
+    result = _run(team_name)
+    if result is None:
+        # Repli : nom d'origine introuvable (changement de sponsor d'une
+        # saison à l'autre par ex.), on essaie le nom alternatif connu.
+        alt_name = _resolve_team_name_fallback(team_name)
+        if alt_name:
+            result = _run(alt_name)
+    return result
 
 
-def _get_h2h(conn, team_a: str, team_b: str,
+def _get_h2h(conn, team_a_code: str, team_b_code: str,
              current_season: int = 2025, seasons_back: int = 4,
              playoff_only: bool = False) -> dict:
+    """
+    Compare sur le code équipe (stable d'une saison à l'autre), pas sur le
+    nom complet : les noms de sponsor changent (ex: Fenerbahce Beko ->
+    Fenerbahce Tarfin), le code équipe non.
+    """
     season_min = current_season - seasons_back + 1
     round_filter = "AND s.round IN ('PO', 'FF')" if playoff_only else ""
     q = f"""
         WITH matchups AS (
             SELECT
-                CASE WHEN UPPER(s.hometeam) = UPPER(?) THEN h.Score ELSE a.Score END AS score_a,
-                CASE WHEN UPPER(s.hometeam) = UPPER(?) THEN a.Score ELSE h.Score END AS score_b
+                CASE WHEN s.homecode = ? THEN h.Score ELSE a.Score END AS score_a,
+                CASE WHEN s.homecode = ? THEN a.Score ELSE h.Score END AS score_b
             FROM schedule s
             JOIN team_stats h
                 ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = h.GameCode
@@ -598,8 +629,8 @@ def _get_h2h(conn, team_a: str, team_b: str,
             WHERE s.played = 'true'
               AND s.Season BETWEEN ? AND ?
               AND (
-                    (UPPER(s.hometeam) = UPPER(?) AND UPPER(s.awayteam) = UPPER(?))
-                 OR (UPPER(s.hometeam) = UPPER(?) AND UPPER(s.awayteam) = UPPER(?))
+                    (s.homecode = ? AND s.awaycode = ?)
+                 OR (s.homecode = ? AND s.awaycode = ?)
               )
               {round_filter}
         )
@@ -609,10 +640,10 @@ def _get_h2h(conn, team_a: str, team_b: str,
         FROM matchups
     """
     row = conn.execute(q, (
-        team_a, team_a,
+        team_a_code, team_a_code,
         season_min, current_season,
-        team_a, team_b,
-        team_b, team_a
+        team_a_code, team_b_code,
+        team_b_code, team_a_code
     )).fetchone()
     if row and row[0]:
         return {"games": row[0], "wins_a": row[1], "avg_margin": row[2] or 0.0}
@@ -735,6 +766,8 @@ def _get_match_context(conn, gamecode: int, season: int) -> Optional[dict]:
 def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
     home_team    = ctx["home_team"]
     away_team    = ctx["away_team"]
+    home_code    = ctx["home_code"]
+    away_code    = ctx["away_code"]
     season       = ctx["season"]
     round_       = ctx["round"]
     is_playoff   = ctx["is_playoff"]
@@ -759,7 +792,7 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
 
     if not home_dist or not away_dist:
         return {"home_prob": 0.5, "away_prob": 0.5,
-                "error": "Distributions introuvables"}
+                "error": "Distributions not found"}
 
     rng = np.random.default_rng()
     h_scores = rng.normal(home_dist["avg_pts"], home_dist["std_pts"], MC_N_SIMULATIONS)
@@ -769,9 +802,9 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
     ci_low   = max(0.02, mc_prob - 1.645 * std_err)
     ci_high  = min(0.98, mc_prob + 1.645 * std_err)
 
-    h2h = _get_h2h(conn, home_team, away_team, season, playoff_only=is_playoff)
+    h2h = _get_h2h(conn, home_code, away_code, season, playoff_only=is_playoff)
     if h2h["games"] < MC_MIN_H2H_GAMES and is_playoff:
-        h2h = _get_h2h(conn, home_team, away_team, season, playoff_only=False)
+        h2h = _get_h2h(conn, home_code, away_code, season, playoff_only=False)
 
     h2h_prob = 0.5
     if h2h["games"] >= MC_MIN_H2H_GAMES:
@@ -853,7 +886,7 @@ def predict_by_gamecode(gamecode: int, season: int) -> dict:
     ctx = _get_match_context(conn, gamecode, season)
     if not ctx:
         return {"home_prob": 0.5, "away_prob": 0.5,
-                "error": f"Gamecode {gamecode} introuvable pour la saison {season}"}
+                "error": f"Gamecode {gamecode} not found for season {season}"}
     return _monte_carlo_win_prob(conn, ctx)
 
 
