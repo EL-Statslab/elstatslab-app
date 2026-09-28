@@ -2485,6 +2485,105 @@ know about injuries, lineups or rest days.
     )
 
 
+def _methodology_game_flow():
+    st.markdown("## Reading Game Flow")
+    st.markdown(
+        """
+Game Flow appears in the Match Center once a game has been played. It has three parts: a
+chart of the score margin, the biggest scoring runs, and the best five man lineup of each
+team.
+
+### The colors
+
+Game Flow always uses two colors. **Blue is the home team and red is the away team**, in
+the chart, in the runs and in the Best 5 cards. They are not the clubs' own colors.
+
+### The chart
+
+The line shows the score margin, calculated from the play by play as home team points minus
+away team points. A new point is recorded every time the margin changes.
+
+The zero line is a tie. Above it, shaded in blue, the home team leads. Below it, shaded in
+red, the away team leads. The further the line is from zero, the bigger the lead. The
+vertical axis, labeled Point differential, shows the size of the margin without a sign, so
+use the zero line and the colors to know who is ahead. The team codes on the left of the
+chart (blue at the top for the home team, red at the bottom for the away team) remind you
+which side is which.
+
+The horizontal axis is not a clock. It follows the sequence of scores, one step for each
+change in the margin. A quarter can therefore look longer or shorter than another depending
+on how many times the margin changed during it. Vertical lines mark the start of each
+quarter (Q2, Q3, Q4), and dashed lines mark the overtime periods (OT1, OT2 and so on).
+
+### Scoring runs
+
+A run is a stretch where one team scores and the opponent does not score at all. Only runs
+of at least 9 unanswered points are marked. When several runs of the same team overlap,
+only the largest one is kept.
+
+Every run is highlighted on the chart with a band in the color of the team that made it,
+labeled with its size in points. Below the chart, the **Biggest Runs** panel lists the three
+largest ones, each with the team code, the size of the run and its **top contributor**: the
+player who scored the most points for that team during the run. A three pointer counts for
+3, a free throw for 1 and any other basket for 2. If two players are tied, both are listed.
+
+**How to read it.** Runs point to the moments where the momentum swung, but a game can also
+be decided by many small stretches rather than one big run.
+
+### Best 5 by NetRtg
+
+For each team, the site reconstructs which five players were on the court at every moment
+of the game: the starters are identified at tip off, then the lineup is updated with each
+substitution. The game is then split into stretches where the same five players stayed on
+the court, and each five is evaluated over all of its stretches combined.
+
+For each five, the site measures:
+
+- the **time** the five spent on the court together
+- the **points scored and allowed** by the team while they were together
+- the **possessions** of each side during that time, estimated from the play by play as
+  field goal attempts + 0.44 × free throw attempts + turnovers − offensive rebounds
+
+From these come the ratings:
+
+| Metric | How it is calculated |
+|---|---|
+| **ORTG** | Points scored per 100 of the team's possessions |
+| **DRTG** | Points allowed per 100 of the opponent's possessions |
+| **NetRtg** | ORTG minus DRTG |
+
+The **Best 5** is the five with the highest NetRtg among those that played enough time
+together. This minimum keeps a lineup that shared the court for only a few possessions from
+topping the list. **From the 2026-27 season, a five needs at least 3 minutes together to be
+eligible. In 2025-26 the minimum was 2 minutes.** If no lineup reaches the minimum in a game,
+the best available lineup is shown instead, so always check the time displayed. If the
+lineups of a team cannot be reconstructed reliably from the data, no Best 5 is shown for
+that team.
+
+Each team gets one card, with the home team on the left and the away team on the right. It
+shows the points scored and allowed by the five, its NetRtg and its time on the court
+together, above the names of the five players.
+
+**How to read it.** Higher is better, and a positive NetRtg means the five outscored the
+opponent over the same number of possessions. Lineups often share the court for only a few
+minutes, so their NetRtg can look very large. Always read it together with the time on
+court and the points scored and allowed.
+
+### Why the Best 5 can show a negative NetRtg
+
+"Best" means the best of that team's lineups in this game, not necessarily a good one. If a
+team was outscored whenever its eligible fives were on the court, which happens most often
+to the losing team in a one sided game, even the top five can end with a negative NetRtg.
+It then simply means the least bad lineup of the night.
+
+A second reason is that possessions are estimated separately for each side. A five that was
+only narrowly ahead on points can therefore show a slightly negative NetRtg. For the same
+reason, this NetRtg can differ slightly from the NETRTG in the Match Center comparison
+tables.
+"""
+    )
+
+
 def _methodology_team_cards():
     st.markdown("## Reading Team Cards")
     st.markdown(
@@ -2575,6 +2674,8 @@ def render_methodology():
     st.caption("How every number on ELSTATSLAB is calculated, and how to read it.")
 
     _methodology_match_center()
+    st.divider()
+    _methodology_game_flow()
     st.divider()
     _methodology_team_cards()
     st.divider()
