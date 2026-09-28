@@ -2362,42 +2362,6 @@ def render_match_center():
 
     st.divider()
 
-    with st.expander("📖 How to read the stats"):
-        st.markdown("""
-*Section 1* : **Efficiency Ratings**
-
-**ORTG (Offensive Rating)** : Points scored per 100 possessions. Higher is better.
-**DRTG (Defensive Rating)** : Points allowed per 100 possessions. Lower is better.
-**NETRTG (Net Rating)** : The difference between ORTG and DRTG. Higher is better.
-
-*Section 2* : **Shooting and Ball Control**
-
-**eFG% (Effective Field Goal Percentage)** : Shooting efficiency accounting for three-pointers.
-**TOV% (Turnover Percentage)** : Share of possessions ending in a turnover. Lower is better.
-**AST% (Assist Percentage)** : Share of made field goals assisted. Higher is better.
-
-*Section 3* : **Rebounding**
-
-**OREB% (Offensive Rebound Percentage)** : Share of available offensive rebounds grabbed.
-**REB% (Total Rebound Percentage)** : Share of available total rebounds grabbed.
-
-*Section 4* : **Win Probability**
-
-The model uses Monte Carlo simulation (10,000 iterations) combining four signals:
-current season performance, head-to-head history (last 4 seasons), home court advantage,
-and offensive/defensive style matchup. During playoffs, the model also integrates
-the current series context — the weight of games already played in the series increases
-with each game (G1=20%, G2=35%, G3=45%). For the Final Four, home court advantage
-is removed as games are played on neutral court.
-
-*Section 5* : **Impact Pulse**
-
-**Impact Score** is a composite z-score combining On/Off deltas across six metrics:
-NETRTG (35%), eFG% (20%), REB% (15%), AST% (15%), OREB% (10%), TOV% (5%).
-It measures how far above average a player's impact was relative to his teammates
-within this single game. Minimum threshold: 12 possessions on court.
-    """)
-
     with st.expander("ℹ️ About ELSTATSLAB Match Center"):
         st.markdown(
             """
@@ -2412,6 +2376,209 @@ within this single game. Minimum threshold: 12 possessions on court.
         )
 
     st.caption("DataViz by @EL_Statslab")
+
+
+# =============================================================================
+# METHODOLOGY TAB
+# =============================================================================
+def _methodology_match_center():
+    st.markdown("## Reading the Match Center")
+
+    st.markdown("### The match header")
+    st.markdown(
+        """
+Each team shows its rank, its record and its last five results. The rank comes from
+the official standings. In the last five results, a green square is a win, a red square
+is a loss, and the most recent game is on the right. In the postseason, the record is
+replaced by the series score.
+"""
+    )
+
+    st.markdown("### The comparison tables")
+    st.markdown(
+        """
+Two tables sit side by side.
+
+**Season** covers every game the two teams have played this season up to that round.
+
+The table on the right depends on the game. Before tip off it shows **Last 5**: the five
+most recent games each team played before that round, which reflects current form.
+Once the game has been played it shows **This Game**: the numbers of that game only.
+
+Every figure is computed on totals, not by averaging game by game. For example, a team's
+ORTG is its total points divided by its total possessions, so a game with more possessions
+weighs more than a short one.
+
+**Colors.** In each row, green marks the better of the two values and red the weaker one.
+The larger the gap between the teams, the stronger the color.
+
+**Δ** is the value of the left team minus the value of the right team. It is not flipped
+for metrics where lower is better. For DRTG and TOV%, a negative Δ therefore means the
+left team is doing better.
+
+**Radar.** The toggle above the tables shows the same comparison as a shape. Each metric
+is placed on a fixed scale, and DRTG and TOV% are flipped, so a bigger shape is always
+a better profile.
+"""
+    )
+
+    st.markdown("### The metrics")
+    st.markdown(
+        """
+| Metric | How it is calculated | How to read it |
+|---|---|---|
+| **ORTG** (Offensive Rating) | Points scored per 100 possessions | Higher is better. Using 100 possessions removes the effect of pace, so slow and fast teams compare fairly. |
+| **DRTG** (Defensive Rating) | Points allowed per 100 possessions | Lower is better. |
+| **NETRTG** (Net Rating) | Points scored minus points allowed, per 100 possessions (ORTG minus DRTG) | Higher is better. A positive value means the team outscores opponents over the same number of possessions. |
+| **OREB%** (Offensive Rebound %) | Team offensive rebounds divided by the offensive rebounds it could have grabbed (its own offensive rebounds plus the opponent's defensive rebounds) | Higher is better. |
+| **REB%** (Total Rebound %) | Team total rebounds divided by all rebounds available in the game | Higher is better. Above 50% means the team wins the rebounding battle. |
+| **AST%** (Assist %) | Team assists divided by team made field goals | Higher means more of the scoring comes from passing. It describes a style more than a level of quality. |
+| **eFG%** (Effective Field Goal %) | (Two pointers made + 1.5 × three pointers made) divided by field goal attempts | Higher is better. It gives a fairer view than raw FG% because a three is worth more than a two. |
+| **TOV%** (Turnover %) | Turnovers divided by possessions | Lower is better. |
+"""
+    )
+
+    st.markdown("### Win probability and Match edge")
+    st.markdown(
+        """
+The bar under the tables appears for games that have not been played yet. It is called
+**Win probability** in the regular season and the Play-In, and **Match edge** in the
+playoffs and the Final Four. It appears once both teams have played at least one game
+this season.
+
+**Step 1: the simulation.** For each team, the model builds a scoring profile: its average
+points per game and how much its scores vary from one game to the next. In the regular
+season, the profile comes from this season's games. Early in the season, when a team has
+very few games, the model also draws on the previous season. In the postseason, the profile
+comes from postseason games of the last four seasons, and falls back to the regular season
+when a team has too few. The model then plays the game 10,000 times, drawing a random score
+for each team from its own profile each time. This is a Monte Carlo simulation: repeat a
+random experiment many times and count how often each outcome happens. The share of
+simulated games won by a team is its simulation result.
+
+**Step 2: four signals.** The simulation result is not used alone. The final probability
+combines four signals:
+
+1. **Current season performance.** The simulation result, blended with each team's win
+   percentage this season. In the regular season this signal carries the largest weight.
+2. **Head to head history.** The results of the last four seasons between the two teams.
+   The average margin is turned into a probability, and the more meetings there are, the more
+   this signal counts. With fewer than four meetings, it stays neutral.
+3. **Home court advantage.** A fixed bonus for the home team, larger in the postseason,
+   and removed at the Final Four because games are played on a neutral court.
+4. **Style matchup.** The home team's offense against the away team's defense, compared
+   with the away team's offense against the home team's defense.
+
+**Step 3: the series (playoffs only).** In a playoff series, the results of the games
+already played are added as a fifth signal, and games played later count more than earlier
+ones. The weight of this signal grows with each game: 20% after one game, 35% after two,
+45% after three, 50% after four and 55% after five or more. The other four signals share
+the remaining weight.
+
+The final probability is always kept between 2% and 98%.
+
+**How to read it.** A 54% probability means that, according to the model, the team wins
+about 54 games out of 100 in this situation. It is an estimate of likelihood, not a
+prediction of the result. The model works from team level results only: it does not
+know about injuries, lineups or rest days.
+"""
+    )
+
+
+def _methodology_team_cards():
+    st.markdown("## Reading Team Cards")
+    st.markdown(
+        """
+Team Cards show a team's profile as **percentiles**. A percentile tells you where the team
+ranks compared with the other EuroLeague teams on a given stat. A 90th percentile means the
+team is ahead of about 90% of teams on that stat, and around the 50th percentile means
+league average territory. It is not a percentage of anything: a 63rd percentile does not
+mean 63%.
+
+Percentiles are oriented so that **a higher percentile is always better**, including for
+DEF RTG and TOV%, where a lower raw value is better. The one exception is **PACE**: it
+describes a playing style, not a level of quality, so a high percentile means a fast team
+and a low percentile means a slow one.
+
+Team Cards use the metrics defined in the Match Center section above (NET RTG, OFF RTG,
+DEF RTG, AST%, TOV%, OREB%) plus the following:
+
+| Metric | How it is calculated | How to read it |
+|---|---|---|
+| **PACE** | Number of possessions per game | Describes tempo. It says nothing about quality. |
+| **DREB%** (Defensive Rebound %) | Share of available defensive rebounds the team grabbed | Higher is better. |
+| **3PM** | Three pointers made per game | Volume of made threes. |
+| **3P%** | Three point shooting percentage | Higher is better. |
+| **TS%** (True Shooting %) | Points scored relative to shooting attempts, counting two pointers, threes and free throws | Higher is better. It is the most complete single shooting efficiency number. |
+| **PAINT PTS** | Points scored in the paint per game | Shows how much of the offense comes from inside. |
+| **FAST BRK** | Fast break points per game | Shows how much the team scores in transition. |
+| **2ND CHANCE** | Points scored after an offensive rebound, per game | Shows how well the team turns offensive rebounds into points. |
+| **PTS OFF TO** | Points scored off opponent turnovers, per game | Shows how well the team punishes mistakes. |
+"""
+    )
+
+
+def _methodology_impact_pulse():
+    st.markdown("## Impact Pulse")
+    st.markdown(
+        """
+Impact Pulse is ELSTATSLAB's own proprietary metric. It is the only individual metric on
+the site, and it appears in the Match Center once a game has been played. It answers one
+question: **how did the team perform with this player on the court compared with without
+him, in this single game?**
+
+### How it is calculated
+
+1. **Split the game into two states for each player.** Possessions with the player on the
+   court, and possessions with him on the bench.
+2. **Measure the team in each state** on six metrics: NETRTG, eFG%, REB%, AST%, OREB% and
+   TOV%. These are the same team metrics defined in the Match Center section.
+3. **Take the On/Off delta** for each metric: the team's value with the player on the court
+   minus its value with him off. The delta is oriented so that a positive number always
+   means a positive effect. For TOV%, fewer turnovers with the player on the court counts
+   as positive.
+4. **Convert each delta into a z score.** This puts all six metrics on the same scale and
+   measures how far the player's delta sits above or below the average of his teammates in
+   that same game.
+5. **Combine the six z scores** into a single composite score.
+6. **Apply a minimum threshold.** A player needs at least 12 possessions on the court to
+   receive a score.
+
+### What you see on the site
+
+Each team shows the player with the highest Impact Pulse score in that game, flagged as the
+**Difference Maker**, with his score next to the label.
+
+Under his name, the On/Off table compares the team's numbers with him **ON** the court and
+**OFF** it, and **Δ** is ON minus OFF. Green means the difference clearly helps the team,
+red means it clearly hurts, and grey means the difference is small. For DRTG and TOV%,
+where lower is better, the colors are flipped accordingly. The table shows eight metrics
+for context, while the score itself is built from the six listed above.
+
+The **Full ranking** lists every player who reached the minimum threshold, ranked by score.
+
+### How to read it
+
+The score is relative, not absolute. **Zero is the average impact of a player in that
+game.** A positive score means the team did better with the player on the court than the
+average teammate's effect suggests, and a negative score means the opposite.
+
+Keep in mind what an On/Off metric cannot do. It measures what happened while a player was
+on the court, not what he caused alone: teammates and opponents on the floor at the same
+time matter, and a single game is a small sample. Read it as a signal of impact, not as a
+full judgment of a player's performance.
+"""
+    )
+
+
+def render_methodology():
+    st.caption("How every number on ELSTATSLAB is calculated, and how to read it.")
+
+    _methodology_match_center()
+    st.divider()
+    _methodology_team_cards()
+    st.divider()
+    _methodology_impact_pulse()
 
 
 def main():
@@ -2435,7 +2602,9 @@ def main():
         st.title("ELSTATSLAB")
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
 
-    tab_match, tab_cards = st.tabs(["📊 Match Center", "🛡️ Team Cards"])
+    tab_match, tab_cards, tab_method = st.tabs(
+        ["📊 Match Center", "🛡️ Team Cards", "📖 Methodology"]
+    )
 
     with tab_match:
         st.caption("Compare any EuroLeague matchup.")
@@ -2443,6 +2612,9 @@ def main():
 
     with tab_cards:
         team_cards.render()
+
+    with tab_method:
+        render_methodology()
 
 
 if __name__ == "__main__":
