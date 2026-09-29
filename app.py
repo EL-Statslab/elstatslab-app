@@ -1384,7 +1384,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         col_x = {"home": 0.18, "metric": 0.50, "away": 0.82}
         # Titre au meme niveau que les noms d'equipes
         ax.text(0.5, 0.885, title, ha="center", va="center",
-                fontsize=28, fontproperties=BARLOW_BOLD)
+                fontsize=20, fontproperties=BARLOW_BOLD, color="#333333")
 
         # Noms d'equipes au niveau des colonnes, sur deux lignes maximum
         for nm, cx in [(home_name, col_x["home"]), (away_name, col_x["away"])]:
