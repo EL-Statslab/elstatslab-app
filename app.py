@@ -1390,18 +1390,18 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         # l'intensite des couleurs porte deja l'ecart).
         col_x = {"home": 0.18, "metric": 0.50, "away": 0.82}
         # Titre au meme niveau que les noms d'equipes
-        ax.text(0.5, 0.885, title, ha="center", va="center",
+        ax.text(0.5, 0.895, title, ha="center", va="center",
                 fontsize=20, fontproperties=BARLOW_BOLD, color="#333333")
 
         # Noms d'equipes au niveau des colonnes, sur deux lignes maximum
         for nm, cx in [(home_name, col_x["home"]), (away_name, col_x["away"])]:
-            ax.text(cx, 0.885, "\n".join(textwrap.wrap(nm, 14)),
+            ax.text(cx, 0.895, "\n".join(textwrap.wrap(nm, 14)),
                     ha="center", va="center", fontsize=20,
                     fontproperties=BARLOW_BOLD, color="#333333",
                     linespacing=0.95)
 
         row_h = 0.100
-        top_y = 0.755
+        top_y = 0.75
         cell_w = 0.32
         cell_h = row_h * 0.88
         for i, m in enumerate(METRICS):
