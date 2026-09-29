@@ -12,6 +12,7 @@ import io
 import json
 import math
 import sqlite3
+import zlib
 from pathlib import Path
 from typing import Optional
 
@@ -794,7 +795,13 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
         return {"home_prob": 0.5, "away_prob": 0.5,
                 "error": "Distributions not found"}
 
-    rng = np.random.default_rng()
+    # Graine deterministe : un meme match donne toujours la meme simulation
+    # tant que les donnees ne changent pas (zlib.crc32 est stable d'un
+    # lancement de Python a l'autre, contrairement a hash()).
+    seed = zlib.crc32(
+        f"{season}|{round_}|{home_code}|{away_code}|{len(serie_scores)}".encode()
+    )
+    rng = np.random.default_rng(seed)
     h_scores = rng.normal(home_dist["avg_pts"], home_dist["std_pts"], MC_N_SIMULATIONS)
     a_scores = rng.normal(away_dist["avg_pts"], away_dist["std_pts"], MC_N_SIMULATIONS)
     mc_prob  = float(np.mean(h_scores > a_scores))
