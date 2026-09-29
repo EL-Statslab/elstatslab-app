@@ -1283,8 +1283,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     fig = plt.figure(figsize=(12, 12), dpi=150, facecolor=BG_WHITE)
     gs = GridSpec(
         nrows=5, ncols=2,
-        height_ratios=[0.7, 2.2, 4.4, 1.3, 0.8],
-        hspace=0.35, wspace=0.15,
+        height_ratios=[0.7, 2.5, 4.4, 1.6, 0.8],
+        hspace=0.22, wspace=0.15,
         left=0.05, right=0.95, top=0.95, bottom=0.03,
     )
 
@@ -1328,10 +1328,10 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             )
             logo_ax.imshow(img, interpolation="lanczos")
             logo_ax.axis("off")
-        ax_head.text(x_center, 0.32, name, ha="center", va="top",
+        ax_head.text(x_center, 0.41, name, ha="center", va="top",
                      fontsize=20, fontproperties=BARLOW_BOLD)
         if not is_postseason_png:
-            ax_head.text(x_center, 0.16, f"#{rank} · {wl}",
+            ax_head.text(x_center, 0.27, f"#{rank} · {wl}",
                          ha="center", va="top", fontsize=16,
                          fontproperties=BARLOW_REGULAR, color="#555555")
         if form:
@@ -1340,7 +1340,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             gap = 0.006
             total = n * sq + (n - 1) * gap
             start = x_center - total / 2
-            sparkline_y = 0.03
+            sparkline_y = 0.04
             for i, win in enumerate(reversed(form)):
                 colour = EL_GREEN if win else EL_RED
                 rect = plt.Rectangle(
@@ -1381,20 +1381,21 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         ax.set_ylim(0, 1)
         # 3 colonnes (la colonne Delta est retiree pour gagner de la place,
         # l'intensite des couleurs porte deja l'ecart).
-        col_x = {"home": 0.19, "metric": 0.50, "away": 0.81}
-        ax.text(0.5, 0.99, title, ha="center", va="top",
+        col_x = {"home": 0.18, "metric": 0.50, "away": 0.82}
+        # Titre au meme niveau que les noms d'equipes
+        ax.text(0.5, 0.885, title, ha="center", va="center",
                 fontsize=28, fontproperties=BARLOW_BOLD)
 
         # Noms d'equipes au niveau des colonnes, sur deux lignes maximum
         for nm, cx in [(home_name, col_x["home"]), (away_name, col_x["away"])]:
             ax.text(cx, 0.885, "\n".join(textwrap.wrap(nm, 14)),
-                    ha="center", va="center", fontsize=17,
+                    ha="center", va="center", fontsize=20,
                     fontproperties=BARLOW_BOLD, color="#333333",
                     linespacing=0.95)
 
         row_h = 0.100
         top_y = 0.755
-        cell_w = 0.29
+        cell_w = 0.32
         cell_h = row_h * 0.88
         for i, m in enumerate(METRICS):
             y = top_y - i * row_h
@@ -1407,16 +1408,16 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                     facecolor=mpl_colour(intensity),
                     edgecolor="#e0e0e0", linewidth=0.5))
             ax.add_patch(plt.Rectangle(
-                (col_x["metric"] - 0.12, y - cell_h / 2), 0.24, cell_h,
+                (col_x["metric"] - 0.13, y - cell_h / 2), 0.26, cell_h,
                 facecolor="#f5f5f5", edgecolor="#e0e0e0", linewidth=0.5))
             hv_s = f"{hv:.1f}" if hv is not None else "-"
             av_s = f"{av:.1f}" if av is not None else "-"
-            ax.text(col_x["home"], y, hv_s, ha="center", va="center",
-                    fontsize=26, fontproperties=BARLOW_BOLD)
-            ax.text(col_x["metric"], y, m, ha="center", va="center",
-                    fontsize=18, fontproperties=BARLOW_SEMIBOLD, color="#333333")
-            ax.text(col_x["away"], y, av_s, ha="center", va="center",
-                    fontsize=26, fontproperties=BARLOW_BOLD)
+            ax.text(col_x["home"], y, hv_s, ha="center", va="center_baseline",
+                    fontsize=20, fontproperties=BARLOW_SEMIBOLD)
+            ax.text(col_x["metric"], y, m, ha="center", va="center_baseline",
+                    fontsize=20, fontproperties=BARLOW_SEMIBOLD, color="#333333")
+            ax.text(col_x["away"], y, av_s, ha="center", va="center_baseline",
+                    fontsize=20, fontproperties=BARLOW_SEMIBOLD)
 
     ax_season = fig.add_subplot(gs[2, 0])
     draw_table(ax_season, "Season", h_season, a_season, home_name, away_name)
@@ -1432,19 +1433,19 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         prob_label = "Win probability" if round_ == "RS" else "Match edge"
         if round_ == "FF":
             prob_label += " (neutral court)"
-        ax_prob.text(0.5, 0.92, prob_label,
+        ax_prob.text(0.5, 0.90, prob_label,
                      ha="center", va="center", fontsize=22, fontproperties=BARLOW_BOLD)
-        bar_y = 0.42
-        bar_h = 0.36
+        bar_y = 0.36
+        bar_h = 0.30
         ax_prob.add_patch(plt.Rectangle(
             (0.1, bar_y), 0.8 * home_prob, bar_h,
             facecolor=EL_GREEN, edgecolor="none"))
         ax_prob.add_patch(plt.Rectangle(
             (0.1 + 0.8 * home_prob, bar_y), 0.8 * away_prob, bar_h,
             facecolor=EL_RED, edgecolor="none"))
-        ax_prob.text(0.1, bar_y - 0.06, f"{home_name}  {home_prob*100:.1f}%",
+        ax_prob.text(0.1, bar_y - 0.07, f"{home_name}  {home_prob*100:.1f}%",
                      ha="left", va="top", fontsize=20, fontproperties=BARLOW_BOLD)
-        ax_prob.text(0.9, bar_y - 0.06, f"{away_prob*100:.1f}%  {away_name}",
+        ax_prob.text(0.9, bar_y - 0.07, f"{away_prob*100:.1f}%  {away_name}",
                      ha="right", va="top", fontsize=20, fontproperties=BARLOW_BOLD)
 
     ax_foot = fig.add_subplot(gs[4, :])
@@ -1453,11 +1454,11 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     ax_foot.set_ylim(0, 1)
     ax_foot.text(0.47, 0.66, "DataViz By EL_STATSLAB", ha="right", va="center",
                  fontsize=20, fontproperties=BARLOW_BOLD, color="#1a1a1a")
-    ax_foot.text(0.5, 0.66, "·", ha="center", va="center",
-                 fontsize=20, color="#bbbbbb")
+    ax_foot.text(0.5, 0.66, "|", ha="center", va="center",
+                 fontsize=20, fontproperties=BARLOW_REGULAR, color="#bbbbbb")
     ax_foot.text(0.53, 0.66, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
                  fontsize=14, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
-    ax_foot.text(0.5, 0.22, "𝕏 @EL_Statslab   ·   elstatslab.com",
+    ax_foot.text(0.5, 0.22, "X @EL_Statslab   |   elstatslab.com",
                  ha="center", va="center", fontsize=14,
                  fontproperties=BARLOW_REGULAR, color="#888888")
 
