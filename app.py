@@ -1581,7 +1581,7 @@ def render_impact_pulse_section(gamecode: int, season: int,
                     f"Impact Pulse · Score {score_str}</span>"
                     f"</div>"
                     f"<div style='font-size:0.65rem;color:#aaaaaa;margin-top:6px;'>"
-                    f"{int(r['on_poss'])} poss ON · min. threshold 12 poss</div>"
+                    f"{int(round(r['on_poss']))} poss ON · min. threshold 12 poss</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -1698,9 +1698,14 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
                            home_disp: str, away_disp: str,
                            round_label: str) -> bytes:
     """
-    Génère un PNG Impact Pulse format carré (12x12).
+    Génère un PNG Impact Pulse format carré (12x12, 150 dpi = 1800 px).
+    La ligne "Poss played" affiche le total d'équipe uniquement si la table
+    impact_pulse contient une colonne team_poss calculée avec la même méthode
+    que on_poss (sinon le ratio serait incohérent). Sans elle, seul le nombre
+    de possessions du joueur est affiche.
     NETRTG, eFG%, REB%, AST%, TOV% — pas de z-score affiché.
-    Style identique aux game previews : logos ELSTATSLAB + EuroLeague.
+    Tailles de police calibrees pour rester lisibles a ~600 px dans la
+    timeline de X.
     """
     IP_EXPORT_METRICS = ["NETRTG", "eFG%", "REB%", "AST%", "TOV%"]
     IP_EXPORT_COLS = {
@@ -1711,11 +1716,11 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         "TOV%":   ("on_tov",   "off_tov"),
     }
 
-    fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=BG_WHITE)
+    fig = plt.figure(figsize=(12, 12), dpi=150, facecolor=BG_WHITE)
     gs = GridSpec(
         nrows=3, ncols=2,
-        height_ratios=[0.45, 4.5, 0.45],
-        hspace=0.15, wspace=0.08,
+        height_ratios=[0.7, 4.4, 0.55],
+        hspace=0.12, wspace=0.08,
         left=0.04, right=0.96, top=0.96, bottom=0.03,
     )
 
@@ -1726,20 +1731,20 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
     ax_title.set_ylim(0, 1)
 
     if ELSTATSLAB_LOGO.exists():
-        brand_ax = ax_title.inset_axes([0.0, -0.3, 0.16, 1.6])
+        brand_ax = ax_title.inset_axes([0.008, 0.10, 0.085, 0.80])
         brand_ax.imshow(plt.imread(str(ELSTATSLAB_LOGO)), interpolation="lanczos")
         brand_ax.axis("off")
     if EUROLEAGUE_LOGO.exists():
-        el_ax = ax_title.inset_axes([0.84, -0.1, 0.16, 1.2])
+        el_ax = ax_title.inset_axes([0.85, 0.05, 0.15, 0.9])
         el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
         el_ax.axis("off")
 
-    ax_title.text(0.50, 0.65, f"Impact Pulse  |  EuroLeague {round_label}",
-                  ha="center", va="center", fontsize=18,
+    ax_title.text(0.50, 0.66, f"Impact Pulse  |  EuroLeague {round_label}",
+                  ha="center", va="center", fontsize=27,
                   fontproperties=BARLOW_BOLD, color="#1a1a1a")
-    ax_title.text(0.50, 0.15, "Who moved the needle?  ·  Impact Score: proprietary On/Off composite metric",
-                  ha="center", va="center", fontsize=10,
-                  fontproperties=BARLOW_REGULAR, color="#888888", style="italic")
+    ax_title.text(0.50, 0.14, "Who moved the needle?  ·  Impact Score: proprietary On/Off composite metric",
+                  ha="center", va="center", fontsize=14,
+                  fontproperties=BARLOW_REGULAR, color="#777777")
 
     # ── Panel par équipe ────────────────────────────────────────────────
     for col_idx, (code, disp) in enumerate(
@@ -1754,14 +1759,14 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
 
         if row.empty:
             ax.text(0.5, 0.5, f"No data for {code}", ha="center", va="center",
-                    fontsize=11, color="#888")
+                    fontsize=16, color="#888")
             continue
 
         r = row.iloc[0]
         score = r["impact_score"]
         score_str = f"{score:+.2f}" if score >= 0 else f"{score:.2f}"
 
-        # Fond de carte header (un peu resserré, bleu marine plus dense)
+        # Fond de carte header
         HEADER_BG = "#121220"
         header_bg = plt.matplotlib.patches.FancyBboxPatch(
             (0.01, 0.80), 0.98, 0.19,
@@ -1770,14 +1775,14 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         )
         ax.add_patch(header_bg)
 
-        # Logo équipe
+        # Logo équipe (plus grand, centre vertical fixe commun a tous)
         lp = logo_path(code)
         if lp:
             zoom = logo_zoom(code)
-            lw = min(0.10 * zoom, 0.14)
-            lh = min(0.17 * zoom, 0.22)
-            logo_cy = 0.895  # centre vertical fixe, commun à tous les logos
-            logo_ax = ax.inset_axes([0.02, logo_cy - lh / 2, lw, lh])
+            lw = min(0.15 * zoom, 0.19)
+            lh = min(0.15 * zoom, 0.19)
+            logo_cy = 0.895
+            logo_ax = ax.inset_axes([0.03, logo_cy - lh / 2, lw, lh])
             img = plt.imread(str(lp))
             if img.ndim == 3 and img.shape[2] == 4:
                 alpha = img[:, :, 3:4]
@@ -1787,25 +1792,27 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
             logo_ax.imshow(img, interpolation="lanczos")
             logo_ax.axis("off")
 
+        text_x = 0.25
+
         # Nom équipe
-        ax.text(0.22, 0.96, disp.upper(), ha="left", va="center",
-                fontsize=8.5, color="#aaaacc",
+        ax.text(text_x, 0.960, disp.upper(), ha="left", va="center",
+                fontsize=15, color="#b8b8d8",
                 fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
         # Nom joueur
-        ax.text(0.22, 0.885, r["player_name"].upper(), ha="left", va="center",
-                fontsize=16, color="#ffffff",
+        ax.text(text_x, 0.893, r["player_name"].upper(), ha="left", va="center",
+                fontsize=28, color="#ffffff",
                 fontproperties=BARLOW_BOLD, transform=ax.transAxes)
 
         # Badges
-        ax.text(0.22, 0.825, "DIFFERENCE MAKER", ha="left", va="center",
-                fontsize=8, color="#ffd700",
+        ax.text(text_x, 0.828, "DIFFERENCE MAKER", ha="left", va="center",
+                fontsize=14, color="#ffd700",
                 fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
-        ax.text(0.95, 0.825, f"Impact Pulse · Score {score_str}", ha="right", va="center",
-                fontsize=8, color="#64ffb4",
-                fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
+        ax.text(0.96, 0.828, f"Impact Score {score_str}", ha="right", va="center",
+                fontsize=15, color="#64ffb4",
+                fontproperties=BARLOW_BOLD, transform=ax.transAxes)
 
-        # Fond clair pour le tableau (remonté puisque le header est moins haut)
+        # Fond clair pour le tableau
         table_bg = plt.matplotlib.patches.FancyBboxPatch(
             (0.01, 0.01), 0.98, 0.77,
             boxstyle="round,pad=0.01",
@@ -1814,16 +1821,16 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
         ax.add_patch(table_bg)
 
         # En-têtes colonnes
-        col_x = [0.15, 0.40, 0.62, 0.84]
+        col_x = [0.17, 0.42, 0.63, 0.85]
         for cx, hdr in zip(col_x, ["Metric", "ON", "OFF", "Δ"]):
-            ax.text(cx, 0.72, hdr, ha="center", va="center",
-                    fontsize=9, color="#555555",
+            ax.text(cx, 0.72, hdr, ha="center", va="center_baseline",
+                    fontsize=16, color="#555555",
                     fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
 
         ax.axhline(0.69, xmin=0.03, xmax=0.97, color="#dee2e6", linewidth=0.8)
 
-        row_h = 0.123
-        y_start = 0.625
+        row_h = 0.117
+        y_start = 0.632
 
         for i, m in enumerate(IP_EXPORT_METRICS):
             y = y_start - i * row_h
@@ -1839,8 +1846,8 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
                 good = delta >= 0.3
                 bad  = delta <= -0.3
 
-            # Zébrage neutre (gris très clair) au lieu d'un fond vert plein,
-            # pour que le vert/rouge du delta reste le seul signal de couleur.
+            # Zébrage neutre (gris très clair) : le vert/rouge du delta reste
+            # le seul signal de couleur.
             if i % 2 == 1:
                 stripe = plt.matplotlib.patches.FancyBboxPatch(
                     (0.03, y - row_h * 0.44), 0.94, row_h * 0.85,
@@ -1862,22 +1869,34 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
             delta_color = "#2e7d32" if good else ("#c62828" if bad else "#888888")
             delta_str = f"{delta:+.1f}"
 
-            ax.text(col_x[0], y, m, ha="center", va="center",
-                    fontsize=10, color="#444444",
+            ax.text(col_x[0], y, m, ha="center", va="center_baseline",
+                    fontsize=17, color="#333333",
                     fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
-            ax.text(col_x[1], y, f"{on_val:.1f}", ha="center", va="center",
-                    fontsize=12, color="#1a1a1a",
-                    fontproperties=BARLOW_BOLD, transform=ax.transAxes)
-            ax.text(col_x[2], y, f"{off_val:.1f}", ha="center", va="center",
-                    fontsize=10, color="#777777",
+            ax.text(col_x[1], y, f"{on_val:.1f}", ha="center", va="center_baseline",
+                    fontsize=24, color="#1a1a1a",
+                    fontproperties=BARLOW_SEMIBOLD, transform=ax.transAxes)
+            ax.text(col_x[2], y, f"{off_val:.1f}", ha="center", va="center_baseline",
+                    fontsize=20, color="#777777",
                     fontproperties=BARLOW_REGULAR, transform=ax.transAxes)
-            ax.text(col_x[3], y, delta_str, ha="center", va="center",
-                    fontsize=12, color=delta_color,
+            ax.text(col_x[3], y, delta_str, ha="center", va="center_baseline",
+                    fontsize=24, color=delta_color,
                     fontproperties=BARLOW_BOLD, transform=ax.transAxes)
 
-        ax.text(0.50, 0.045, "Min. threshold: 12 poss/game",
-                ha="center", va="center", fontsize=7.5,
-                fontproperties=BARLOW_REGULAR, color="#aaaaaa", style="italic",
+        # Possessions du joueur sur le total de son equipe
+        on_poss = int(round(r["on_poss"])) if "on_poss" in r.index and pd.notna(r["on_poss"]) else None
+        total_poss = None
+        if "team_poss" in r.index and pd.notna(r["team_poss"]) and on_poss is not None:
+            total_poss = int(round(r["team_poss"]))
+        if on_poss is not None:
+            poss_txt = (f"Poss played: {on_poss} / {total_poss} team possessions"
+                        if total_poss else f"Poss played: {on_poss}")
+            ax.text(0.50, 0.060, poss_txt,
+                    ha="center", va="center", fontsize=15,
+                    fontproperties=BARLOW_SEMIBOLD, color="#555555",
+                    transform=ax.transAxes)
+        ax.text(0.50, 0.026, "Min. threshold: 12 poss/game",
+                ha="center", va="center", fontsize=12,
+                fontproperties=BARLOW_REGULAR, color="#999999",
                 transform=ax.transAxes)
 
     # ── Footer ──────────────────────────────────────────────────────────
@@ -1885,18 +1904,18 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
     ax_foot.axis("off")
     ax_foot.set_xlim(0, 1)
     ax_foot.set_ylim(0, 1)
-    ax_foot.text(0.47, 0.66, "DataViz By EL_STATSLAB", ha="right", va="center",
-                 fontsize=15, fontproperties=BARLOW_BOLD, color="#1a1a1a")
-    ax_foot.text(0.5, 0.66, "·", ha="center", va="center",
-                 fontsize=15, color="#bbbbbb")
-    ax_foot.text(0.53, 0.66, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
-                 fontsize=10.5, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
-    ax_foot.text(0.5, 0.26, "𝕏 @EL_Statslab   ·   elstatslab.com",
-                 ha="center", va="center", fontsize=10.5,
+    ax_foot.text(0.47, 0.64, "DataViz By EL_STATSLAB", ha="right", va="center",
+                 fontsize=20, fontproperties=BARLOW_BOLD, color="#1a1a1a")
+    ax_foot.text(0.5, 0.64, "|", ha="center", va="center",
+                 fontsize=20, fontproperties=BARLOW_REGULAR, color="#bbbbbb")
+    ax_foot.text(0.53, 0.64, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
+                 fontsize=14, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
+    ax_foot.text(0.5, 0.20, "X @EL_Statslab   |   elstatslab.com",
+                 ha="center", va="center", fontsize=14,
                  fontproperties=BARLOW_REGULAR, color="#888888")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120, bbox_inches="tight")
+    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=150)
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
@@ -2626,17 +2645,28 @@ him, in this single game?**
 1. **Split the game into two states for each player.** Possessions with the player on the
    court, and possessions with him on the bench.
 2. **Measure the team in each state** on six metrics: NETRTG, eFG%, REB%, AST%, OREB% and
-   TOV%. These are the same team metrics defined in the Match Center section.
+   TOV%. These are the team metrics defined in the Match Center section, with the possession
+   count described in the note below.
 3. **Take the On/Off delta** for each metric: the team's value with the player on the court
    minus its value with him off. The delta is oriented so that a positive number always
    means a positive effect. For TOV%, fewer turnovers with the player on the court counts
    as positive.
-4. **Convert each delta into a z score.** This puts all six metrics on the same scale and
-   measures how far the player's delta sits above or below the average of his teammates in
-   that same game.
-5. **Combine the six z scores** into a single composite score.
+4. **Scale each delta.** Each delta is divided by a fixed reference size for its metric, so
+   that a swing in one metric can be added to a swing in another on a common footing.
+5. **Combine the six scaled deltas** into a single composite score using fixed weights.
+   NETRTG carries the most weight, followed by eFG%, then REB%, AST% and TOV%, and OREB%
+   carries the least.
 6. **Apply a minimum threshold.** A player needs at least 12 possessions on the court to
    receive a score.
+
+### A note on possessions
+
+From the 2026 season, Impact Pulse counts possessions with the same formula as the Match
+Center: field goal attempts plus 0.44 times free throw attempts plus turnovers minus offensive
+rebounds. Games from the 2025 season were calculated earlier with a simpler count, field goal
+attempts plus turnovers, so 2025 figures can differ slightly from the Match Center tables.
+Within any game, ON and OFF are always measured with the same count, so the comparison stays
+fair.
 
 ### What you see on the site
 
@@ -2650,12 +2680,15 @@ where lower is better, the colors are flipped accordingly. The table shows eight
 for context, while the score itself is built from the six listed above.
 
 The **Full ranking** lists every player who reached the minimum threshold, ranked by score.
+On the downloadable image, the line under the table shows the possessions the player was
+on the court out of the possessions his team played in the game.
 
 ### How to read it
 
-The score is relative, not absolute. **Zero is the average impact of a player in that
-game.** A positive score means the team did better with the player on the court than the
-average teammate's effect suggests, and a negative score means the opposite.
+**Zero means no difference** between the team's numbers with the player on the court and
+with him off it. A positive score means the team did better with the player on the court,
+and a negative score means the opposite. The scaling is fixed, so scores can be compared
+from one game to another, but games differ in length and pace, so compare with care.
 
 Keep in mind what an On/Off metric cannot do. It measures what happened while a player was
 on the court, not what he caused alone: teammates and opponents on the floor at the same
