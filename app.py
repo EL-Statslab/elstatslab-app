@@ -1507,6 +1507,17 @@ def load_impact_pulse(gamecode: int, season: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _ip_min_poss(r) -> int:
+    """Seuil minimum de possessions utilise pour cette ligne (12 par defaut
+    pour les lignes calculees avant l'ajout de la colonne min_poss)."""
+    try:
+        if "min_poss" in r.index and pd.notna(r["min_poss"]):
+            return int(round(r["min_poss"]))
+    except Exception:
+        pass
+    return 12
+
+
 def _ip_delta_bg(metric: str, delta: float) -> str:
     """Couleur de fond pour une cellule delta On/Off."""
     if metric in IP_LOWER_IS_BETTER:
@@ -1581,7 +1592,7 @@ def render_impact_pulse_section(gamecode: int, season: int,
                     f"Impact Pulse · Score {score_str}</span>"
                     f"</div>"
                     f"<div style='font-size:0.65rem;color:#aaaaaa;margin-top:6px;'>"
-                    f"{int(round(r['on_poss']))} poss ON · min. threshold 12 poss</div>"
+                    f"{int(round(r['on_poss']))} poss ON · min. threshold {_ip_min_poss(r)} poss</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
@@ -1894,7 +1905,7 @@ def build_impact_pulse_png(ip_df: pd.DataFrame,
                     ha="center", va="center", fontsize=15,
                     fontproperties=BARLOW_SEMIBOLD, color="#555555",
                     transform=ax.transAxes)
-        ax.text(0.50, 0.026, "Min. threshold: 12 poss/game",
+        ax.text(0.50, 0.026, f"Min. threshold: {_ip_min_poss(r)} poss/game",
                 ha="center", va="center", fontsize=12,
                 fontproperties=BARLOW_REGULAR, color="#999999",
                 transform=ax.transAxes)
@@ -2656,8 +2667,9 @@ him, in this single game?**
 5. **Combine the six scaled deltas** into a single composite score using fixed weights.
    NETRTG carries the most weight, followed by eFG%, then REB%, AST% and TOV%, and OREB%
    carries the least.
-6. **Apply a minimum threshold.** A player needs at least 12 possessions on the court to
-   receive a score.
+6. **Apply a minimum threshold.** From the 2026 season, a player needs at least 20
+   possessions on the court to receive a score. Games from the 2025 season use a minimum
+   of 12.
 
 ### A note on possessions
 
