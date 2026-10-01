@@ -15,6 +15,7 @@ import sqlite3
 import zlib
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -2145,10 +2146,46 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 # =============================================================================
 # APP
 # =============================================================================
+# =============================================================================
+# SHARE LINKS
+# =============================================================================
+SHARE_BASE_URL = "https://elstatslab.streamlit.app"
+
+
+def _read_deeplink_once() -> dict:
+    """Reads s (season), r (round) and m (HOME_AWAY codes) from the URL, once
+    per session. The parameters are then cleared from the address bar so the
+    link copied from the browser never goes stale after the visitor browses."""
+    if "_dl" in st.session_state:
+        return st.session_state["_dl"]
+    dl: dict = {}
+    try:
+        qp = st.query_params
+        s, r, m = qp.get("s"), qp.get("r"), qp.get("m")
+        if s and str(s).isdigit():
+            dl["season"] = int(s)
+        if r and str(r).isdigit():
+            dl["round"] = int(r)
+        if m and "_" in str(m) and str(m).replace("_", "").isalnum() and len(str(m)) <= 12:
+            dl["match"] = str(m).upper()
+        if ("round" in dl or "match" in dl) and "season" not in dl:
+            dl["season"] = load_seasons()[0]
+        if dl:
+            st.query_params.clear()
+    except Exception:
+        dl = {}
+    st.session_state["_dl"] = dl
+    return dl
+
+
 def render_match_center():
+    dl = _read_deeplink_once()
     with st.sidebar:
         st.header("Filters")
         seasons = load_seasons()
+        if dl.get("season") in seasons and not st.session_state.get("_dl_season_set"):
+            st.session_state["season_select"] = dl["season"]
+            st.session_state["_dl_season_set"] = True
         season = st.selectbox("Season", seasons, index=0, key="season_select")
 
     schedule_all = load_all_schedule(int(season))
@@ -2179,6 +2216,13 @@ def render_match_center():
     upcoming_rounds = [gd for gd in all_rounds_sorted if not round_status.get(gd, True)]
     current_round = upcoming_rounds[0] if upcoming_rounds else all_rounds_sorted[-1]
 
+    # Share link: a visitor arriving with a round in the URL is anchored on it.
+    dl_active = (
+        dl.get("season") == int(season)
+        and dl.get("round") in all_rounds_sorted
+    )
+    anchor_round = dl["round"] if dl_active else current_round
+
     # ✅ journée entièrement jouée ; 🟡 en cours (certains matchs joués,
     # d'autres pas, cas d'une journée à cheval sur deux jours) ; ⏳ uniquement
     # sur la journée courante quand elle n'a pas encore démarré du tout.
@@ -2202,19 +2246,29 @@ def render_match_center():
         selector_rounds = postseason_rounds
         section_title = "Postseason"
     elif postseason_rounds:
-        current_idx = all_rounds_sorted.index(current_round)
+        current_idx = all_rounds_sorted.index(anchor_round)
         start = max(0, current_idx - 3)
         end = min(len(all_rounds_sorted), current_idx + 4)
         selector_rounds = all_rounds_sorted[start:end]
         section_title = "Matchdays"
     else:
-        current_idx = all_rounds_sorted.index(current_round)
+        current_idx = all_rounds_sorted.index(anchor_round)
         start = max(0, current_idx - 3)
         end = min(len(all_rounds_sorted), current_idx + 4)
         selector_rounds = all_rounds_sorted[start:end]
         section_title = "Regular Season"
 
-    default_round = current_round if current_round in selector_rounds else selector_rounds[-1]
+    default_round = anchor_round if anchor_round in selector_rounds else (
+        current_round if current_round in selector_rounds else selector_rounds[-1]
+    )
+
+    # Share link to a regular season round while the postseason is displayed:
+    # open the "browse regular season" view on that round.
+    if (dl_active and section_title == "Postseason"
+            and dl["round"] not in selector_rounds
+            and not st.session_state.get("_dl_rs_set")):
+        st.session_state["browse_rs_round"] = dl["round"]
+        st.session_state["_dl_rs_set"] = True
 
     st.markdown(f"### {section_title}")
 
@@ -2229,13 +2283,24 @@ def render_match_center():
     except ValueError:
         default_index = len(selector_rounds) - 1
 
+    if (dl_active and dl["round"] in selector_rounds
+            and not st.session_state.get("_dl_round_set")):
+        st.session_state["main_round_radio"] = short_labels[
+            selector_rounds.index(dl["round"])
+        ]
+        st.session_state["_dl_round_set"] = True
+
+    radio_kwargs = {}
+    if "main_round_radio" not in st.session_state:
+        radio_kwargs["index"] = default_index
+
     selected_label = st.radio(
         "Select a round",
         options=short_labels,
-        index=default_index,
         horizontal=True,
         label_visibility="collapsed",
         key="main_round_radio",
+        **radio_kwargs,
     )
     rnd = label_to_round[selected_label]
 
@@ -2298,6 +2363,19 @@ def render_match_center():
     if games.empty:
         st.warning("No games for this round.")
         return
+
+    # Share link to a specific match: show it first and open its analysis once.
+    dl_match = dl.get("match") if (dl_active and dl.get("round") == int(rnd)) else None
+    if dl_match:
+        game_keys = (games["homecode"].astype(str).str.upper() + "_"
+                     + games["awaycode"].astype(str).str.upper())
+        linked = games[game_keys == dl_match]
+        if not linked.empty:
+            games = pd.concat([linked, games.drop(linked.index)])
+            if not st.session_state.get("_dl_match_opened"):
+                lr = linked.iloc[0]
+                st.session_state[f"open_{int(rnd)}_{lr['homecode']}_{lr['awaycode']}"] = True
+                st.session_state["_dl_match_opened"] = True
 
     all_games = load_team_games(int(season))
     official_standings = load_official_standings()
@@ -2369,11 +2447,20 @@ def render_match_center():
 
             is_open = st.session_state[toggle_key]
             btn_label = "Hide analysis ▲" if is_open else "View analysis ▼"
+            share_url = f"{SHARE_BASE_URL}/?" + urlencode(
+                {"s": int(season), "r": int(rnd), "m": f"{hcode}_{acode}"}
+            )
 
-            if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
-                         use_container_width=True):
-                st.session_state[toggle_key] = not is_open
-                st.rerun()
+            btn_col, share_col = st.columns([3, 1])
+            with btn_col:
+                if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
+                             use_container_width=True):
+                    st.session_state[toggle_key] = not is_open
+                    st.rerun()
+            with share_col:
+                with st.popover("🔗 Share"):
+                    st.caption("Copy this link to share this match:")
+                    st.code(share_url, language=None)
 
             if st.session_state[toggle_key]:
                 st.divider()
