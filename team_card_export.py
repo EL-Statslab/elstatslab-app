@@ -187,7 +187,7 @@ def build_team_card_png(
     games_played: Optional[int] = None,
     colour_fn: Optional[Callable[[float], tuple]] = None,
     n_highlight: int = 3,
-    neutral_labels: Sequence[str] = ("PACE", "AST%"),
+    neutral_labels: Sequence[str] = ("PACE",),
 ) -> bytes:
     """
     rows: sequence of (label, value_text, percentile) in display order.
@@ -327,14 +327,18 @@ def build_team_card_png(
                 fontsize=18, fontproperties=BARLOW_BOLD,
                 color=col_text, zorder=4)
 
+    neutral_txt = " and ".join(neutral_labels)
+    legend_txt = ("Badge = percentile rank vs the other teams (100 best, 0 worst). "
+                  "PACE: high means fast. Shaded rows: strongest and weakest")
+    legend_txt += f" ({neutral_txt} excluded)." if neutral_txt else "."
+
     # ── Legend ──────────────────────────────────────────────────────────
     ax_leg = fig.add_subplot(gs[3, 0])
     ax_leg.axis("off")
     ax_leg.set_xlim(0, 1)
     ax_leg.set_ylim(0, 1)
     ax_leg.text(0.5, 0.5,
-                "Badge = percentile rank vs the other teams (100 best, 0 worst). "
-                "PACE: high means fast. Shaded rows: strongest and weakest (PACE and AST% excluded).",
+                legend_txt,
                 ha="center", va="center", fontsize=14,
                 fontproperties=BARLOW_REGULAR, color="#777777")
 
