@@ -2020,6 +2020,13 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     with tcol2:
         use_radar = st.toggle("🕸️ Radar", key=toggle_key,
                               value=st.session_state[toggle_key])
+    with tcol3:
+        share_url = f"{SHARE_BASE_URL}/?" + urlencode(
+            {"s": int(rnd_season), "r": int(rnd), "m": f"{hcode}_{acode}"}
+        )
+        with st.popover("🔗 Share"):
+            st.caption("Copy this link to share this match:")
+            st.code(share_url, language=None)
 
     col1, col2 = st.columns(2)
     if use_radar:
@@ -2447,20 +2454,11 @@ def render_match_center():
 
             is_open = st.session_state[toggle_key]
             btn_label = "Hide analysis ▲" if is_open else "View analysis ▼"
-            share_url = f"{SHARE_BASE_URL}/?" + urlencode(
-                {"s": int(season), "r": int(rnd), "m": f"{hcode}_{acode}"}
-            )
 
-            btn_col, share_col = st.columns([3, 1])
-            with btn_col:
-                if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
-                             use_container_width=True):
-                    st.session_state[toggle_key] = not is_open
-                    st.rerun()
-            with share_col:
-                with st.popover("🔗 Share"):
-                    st.caption("Copy this link to share this match:")
-                    st.code(share_url, language=None)
+            if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
+                         use_container_width=True):
+                st.session_state[toggle_key] = not is_open
+                st.rerun()
 
             if st.session_state[toggle_key]:
                 st.divider()
