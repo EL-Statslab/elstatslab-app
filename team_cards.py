@@ -31,6 +31,7 @@ from shared import (
     logo_zoom,
     read_sql,
 )
+from team_card_export import build_team_card_png
 
 STAT_ROWS = [
     ("net_rtg", "NET RTG", "pct_net_rtg", "{:.1f}"),
@@ -382,6 +383,52 @@ def _filter_caption(filter_type: str, round_code: str | None, gameday: int | Non
 
 
 # ============================================================
+# EXPORT PNG (visuel de marque pour X)
+# ============================================================
+def _png_scope_label(filter_type: str, round_code: str | None,
+                     gameday: int | None, n_games: int | None) -> str:
+    if filter_type == "round":
+        return f"{ROUND_LABELS.get(round_code, round_code)} · Per Game"
+    if filter_type == "day":
+        return f"Regular Season · Round {gameday} · 1 Game"
+    return f"Regular Season · Last {n_games} Games · Per Game"
+
+
+def _season_label(season: int) -> str:
+    # Season=YYYY en base correspond à la saison YYYY-(YY+1)
+    return f"{season}-{str(season + 1)[-2:]}"
+
+
+def _team_logo_path(code: str) -> Path | None:
+    filename = LOGO_MAP.get(code)
+    if not filename:
+        return None
+    p = Path(LOGOS_DIR) / filename
+    return p if p.exists() else None
+
+
+def build_team_card_export(row: pd.Series, code: str, disp_name: str, season: int,
+                           filter_type: str, round_code: str | None,
+                           gameday: int | None, n_games: int | None) -> bytes:
+    rows = []
+    for value_key, label, pct_key, fmt in STAT_ROWS:
+        value = row[value_key]
+        pct = row[pct_key]
+        value_text = fmt.format(value) if pd.notna(value) else "n/a"
+        rows.append((label, value_text, float(pct) if pd.notna(pct) else None))
+
+    return build_team_card_png(
+        team_name=disp_name,
+        rows=rows,
+        team_logo_path=_team_logo_path(code),
+        scope_label=_png_scope_label(filter_type, round_code, gameday, n_games),
+        season_label=_season_label(season),
+        games_played=int(row["GP"]) if filter_type == "round" else None,
+        colour_fn=percentile_color,
+    )
+
+
+# ============================================================
 # RENDER — appelé depuis app.py à l'intérieur d'un onglet
 # ============================================================
 def render() -> None:
@@ -462,6 +509,28 @@ def render() -> None:
 
         for value_key, label, pct_key, fmt in STAT_ROWS:
             render_stat_row(label, row[value_key], row[pct_key], fmt)
+
+        # ── Export PNG ────────────────────────────────────────────────────
+        st.divider()
+        scope_key = f"{selected_code}_{season}_{filter_type}_{round_code}_{gameday}_{n_games}"
+        png_key = f"tc_png_{scope_key}"
+        if png_key not in st.session_state:
+            if st.button("📥 Generate Team Card image", key=f"tc_png_btn_{scope_key}"):
+                with st.spinner("Generating Team Card image..."):
+                    st.session_state[png_key] = build_team_card_export(
+                        row, selected_code, disp_name, season,
+                        filter_type, round_code, gameday, n_games,
+                    )
+                st.rerun()
+
+        if png_key in st.session_state:
+            st.download_button(
+                label="📥 Download Team Card image",
+                data=st.session_state[png_key],
+                file_name=f"TeamCard_{selected_code}.png",
+                mime="image/png",
+                key=f"tc_png_dl_{scope_key}",
+            )
 
         return
 
