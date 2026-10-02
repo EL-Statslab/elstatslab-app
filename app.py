@@ -28,6 +28,7 @@ from PIL import Image
 
 from gameflow_chart import render_gameflow_png
 import team_cards
+import shotmap_ui
 
 # =============================================================================
 # CONFIG
@@ -2339,6 +2340,21 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             card_index=card_index,
         )
 
+        # ── Shot Map ──────────────────────────────────────────────────────
+        shotmap_ui.render_match_shotmaps(
+            conn=get_conn(),
+            season=rnd_season,
+            game_code=gc_num,
+            home_code=hcode,
+            away_code=acode,
+            home_disp=home_disp,
+            away_disp=away_disp,
+            round_label=round_label_long,
+            card_index=card_index,
+            elstatslab_logo=ELSTATSLAB_LOGO,
+            team_logo_fn=logo_path,
+        )
+
     st.divider()
 
     raw_gc = g["gamecode"]
@@ -3059,6 +3075,59 @@ full judgment of a player's performance.
     )
 
 
+def _methodology_shot_maps():
+    st.markdown("## Reading Shot Maps")
+    st.markdown(
+        """
+Shot Maps show where a team shoots and how well it converts. Free throws are not included.
+Every field goal attempt is drawn on the court: a green cross is a made shot and a red circle
+is a missed one. They appear in the Match Center once a game has been played, under Impact
+Pulse, and in the Shot Maps tab for a team over a competition and a season.
+
+### The five zones
+
+Each shot belongs to exactly one zone:
+
+| Zone | What it covers |
+|---|---|
+| **Restricted Area** | Within 1.25 m of the basket |
+| **Paint** | The painted area, outside the restricted area |
+| **Midrange** | Every other two point shot |
+| **Corner 3** | Three pointers taken from the straight section of the line, about 3 m from the baseline |
+| **Above the Break 3** | Every other three pointer |
+
+Under each zone the map shows its FG% and the made shots out of attempts. A zone without any
+shot reads No shots. The map is cut about 9 m from the basket to stay readable, but every
+shot is counted in the numbers.
+
+### The colors
+
+A zone is colored by comparing the team's FG% in that zone with the league average in the
+same zone, competition and season. Green is above the league average and red is below. The
+strongest colors correspond to a gap of about 7 points or more. Zones with few shots are
+pulled toward the league average, with a weight equivalent to 20 shots, so that a handful of
+attempts does not produce an extreme color. The numbers written on the map are always the
+raw ones. Until about ten games have been played in the competition, there is no reliable
+league average, and the color simply follows the FG%.
+
+### Heatmap
+
+In the Shot Maps tab, a heatmap of shot density is available once a team has at least ten
+games in the selection. With fewer games, the density mostly reflects chance, so only the zone
+view is offered. In a single game view, only the zone view is shown.
+
+### When the shot locations look incomplete
+
+For a few games, the official data contains no corner three at all, even though many three
+pointers were taken, which almost never happens in a real game. When a game has at least 20
+three point attempts and not a single one in the corner, the site flags it: a warning appears
+above the map, and the Corner 3 zone reads Not recorded instead of No shots. These games are
+also left out of the league average used for the colors. A game checked against the official
+shot chart and found identical is no longer flagged.
+"""
+    )
+
+
 def render_methodology():
     st.caption("How every number on ELSTATSLAB is calculated, and how to read it.")
 
@@ -3069,6 +3138,8 @@ def render_methodology():
     _methodology_team_cards()
     st.divider()
     _methodology_impact_pulse()
+    st.divider()
+    _methodology_shot_maps()
 
 
 def main():
@@ -3092,8 +3163,8 @@ def main():
         st.title("ELSTATSLAB")
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
 
-    tab_match, tab_cards, tab_method = st.tabs(
-        ["📊 Match Center", "🛡️ Team Cards", "📖 Methodology"]
+    tab_match, tab_cards, tab_shots, tab_method = st.tabs(
+        ["📊 Match Center", "🛡️ Team Cards", "🎯 Shot Maps", "📖 Methodology"]
     )
 
     with tab_match:
@@ -3102,6 +3173,15 @@ def main():
 
     with tab_cards:
         team_cards.render()
+
+    with tab_shots:
+        shotmap_ui.render_shot_maps_tab(
+            conn=get_conn(),
+            seasons=load_seasons(),
+            name_fn=lambda c: display_name(c, c),
+            elstatslab_logo=ELSTATSLAB_LOGO,
+            team_logo_fn=logo_path,
+        )
 
     with tab_method:
         render_methodology()
