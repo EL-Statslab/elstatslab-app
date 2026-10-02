@@ -889,13 +889,265 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
 
 
 @st.cache_data(ttl=300)
-def predict_by_gamecode(gamecode: int, season: int) -> dict:
+def _predict_legacy(gamecode: int, season: int) -> dict:
     conn = get_conn()
     ctx = _get_match_context(conn, gamecode, season)
     if not ctx:
         return {"home_prob": 0.5, "away_prob": 0.5,
                 "error": f"Gamecode {gamecode} not found for season {season}"}
     return _monte_carlo_win_prob(conn, ctx)
+
+
+# =============================================================================
+# MONTE CARLO WIN PROBABILITY MODEL, VERSION 5 (regular season games)
+# Used from round 4 of the 2026 season. Play-In, Playoffs and Final Four games
+# still use the previous model (see predict_by_gamecode at the end).
+# =============================================================================
+V5_N_SIMS = 10_000
+V5_N_FULL = 12
+V5_MIN_GAMES = 2
+V5_MIN_LEAGUE_ROWS = 20
+V5_H2H_SEASONS = 4
+V5_H2H_MIN_GAMES = 4
+
+# Home win rate in regular season games from 2022 to 2025: 823 wins in 1298 games.
+V5_HOME_WIN_RATE = 823 / 1298
+V5_HOME_SHIFT = math.log(V5_HOME_WIN_RATE / (1 - V5_HOME_WIN_RATE))
+
+_V5_W = {"season": 0.40, "h2h": 0.25, "style": 0.15}
+_V5_TOT = sum(_V5_W.values())
+V5_W_SEASON = _V5_W["season"] / _V5_TOT
+V5_W_H2H = _V5_W["h2h"] / _V5_TOT
+V5_W_STYLE = _V5_W["style"] / _V5_TOT
+
+V5_KEYS = ("avg_pts", "std_pts", "avg_ortg", "avg_drtg", "avg_pace")
+_V5_GC = "CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER)"
+
+
+def _v5_logistic(x, scale=2.5):
+    return 1.0 / (1.0 + math.exp(-scale * x))
+
+
+def _v5_logit(p):
+    return math.log(p / (1 - p))
+
+
+def _v5_sigmoid(x):
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def _v5_clamp(p):
+    return max(0.02, min(0.98, p))
+
+
+# All queries use the team code, which is stable from one season to the next,
+# so sponsor name changes do not break the link with the previous season.
+_V5_TEAM_SQL = """
+    SELECT AVG(t.Score),
+           SQRT(MAX(0.0, AVG(t.Score * t.Score) - AVG(t.Score) * AVG(t.Score))),
+           AVG(t.Off_Rtg), AVG(t.Def_Rtg), AVG(t.Pace), COUNT(*)
+    FROM team_stats t
+    JOIN schedule s
+      ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = t.GameCode
+     AND s.Season = t.Season
+    WHERE t.Season = ? AND s.round = 'RS' AND s.played = 'true'
+      AND ((s.homecode = ? AND UPPER(t.TeamName) = UPPER(s.hometeam))
+        OR (s.awaycode = ? AND UPPER(t.TeamName) = UPPER(s.awayteam)))
+"""
+
+_V5_LEAGUE_SQL = """
+    SELECT AVG(t.Score),
+           SQRT(MAX(0.0, AVG(t.Score * t.Score) - AVG(t.Score) * AVG(t.Score))),
+           AVG(t.Off_Rtg), AVG(t.Def_Rtg), AVG(t.Pace), COUNT(*)
+    FROM team_stats t
+    JOIN schedule s
+      ON CAST(SUBSTR(s.gamecode, INSTR(s.gamecode, '_') + 1) AS INTEGER) = t.GameCode
+     AND s.Season = t.Season
+    WHERE t.Season = ? AND s.round = 'RS' AND s.played = 'true'
+"""
+
+_V5_WIN_SQL = f"""
+    SELECT COUNT(*),
+           SUM(CASE WHEN (s.homecode = ? AND h.Score > a.Score)
+                      OR (s.awaycode = ? AND a.Score > h.Score) THEN 1 ELSE 0 END)
+    FROM schedule s
+    JOIN team_stats h
+      ON h.Season = s.Season AND h.GameCode = {_V5_GC}
+     AND UPPER(h.TeamName) = UPPER(s.hometeam)
+    JOIN team_stats a
+      ON a.Season = s.Season AND a.GameCode = {_V5_GC}
+     AND UPPER(a.TeamName) = UPPER(s.awayteam)
+    WHERE s.Season = ? AND s.round = 'RS' AND s.played = 'true'
+      AND (s.homecode = ? OR s.awaycode = ?)
+"""
+
+_V5_H2H_SQL = f"""
+    WITH matchups AS (
+        SELECT CASE WHEN s.homecode = ? THEN h.Score ELSE a.Score END AS score_a,
+               CASE WHEN s.homecode = ? THEN a.Score ELSE h.Score END AS score_b
+        FROM schedule s
+        JOIN team_stats h
+          ON {_V5_GC} = h.GameCode AND s.Season = h.Season
+         AND UPPER(h.TeamName) = UPPER(s.hometeam)
+        JOIN team_stats a
+          ON {_V5_GC} = a.GameCode AND s.Season = a.Season
+         AND UPPER(a.TeamName) = UPPER(s.awayteam)
+        WHERE s.played = 'true' AND s.Season BETWEEN ? AND ?
+          AND ((s.homecode = ? AND s.awaycode = ?)
+            OR (s.homecode = ? AND s.awaycode = ?))
+    )
+    SELECT COUNT(*), ROUND(AVG(score_a - score_b), 2) FROM matchups
+"""
+
+
+def _v5_team_dist(conn, code, season):
+    row = conn.execute(_V5_TEAM_SQL, (season, code, code)).fetchone()
+    if row and row[5] and row[5] >= V5_MIN_GAMES:
+        d = dict(zip(V5_KEYS, row[:5]))
+        d["games"] = row[5]
+        return d
+    return None
+
+
+def _v5_league_dist(conn, season):
+    for yr in (season, season - 1):
+        row = conn.execute(_V5_LEAGUE_SQL, (yr,)).fetchone()
+        if row and row[5] and row[5] >= V5_MIN_LEAGUE_ROWS:
+            return dict(zip(V5_KEYS, row[:5]))
+    return None
+
+
+def _v5_team_profile(conn, code, season, league):
+    """Current season blended with the team's previous season.
+    Without a previous season, the profile is pulled toward the league average."""
+    cur = _v5_team_dist(conn, code, season)
+    prev = _v5_team_dist(conn, code, season - 1)
+    prior, source = (prev, "previous season") if prev else (league, "league average")
+    n = cur["games"] if cur else 0
+    w = min(1.0, n / V5_N_FULL)
+    prof = {}
+    for k in V5_KEYS:
+        c = cur[k] if cur else None
+        p = prior[k]
+        if c is None:
+            prof[k] = p
+        elif p is None:
+            prof[k] = c
+        else:
+            prof[k] = w * c + (1 - w) * p
+    prof["games"] = n
+    prof["prior"] = source
+    return prof
+
+
+def _v5_win_rate(conn, code, season):
+    row = conn.execute(_V5_WIN_SQL, (code, code, season, code, code)).fetchone()
+    if row and row[0]:
+        return row[0], (row[1] or 0) / row[0]
+    return 0, None
+
+
+def _v5_blended_win_rate(conn, code, season):
+    g, cur = _v5_win_rate(conn, code, season)
+    pg, prev = _v5_win_rate(conn, code, season - 1)
+    prior = prev if prev is not None else 0.5
+    if cur is None:
+        return prior
+    w = min(1.0, g / V5_N_FULL)
+    return w * cur + (1 - w) * prior
+
+
+def _v5_h2h(conn, code_a, code_b, season):
+    season_min = season - V5_H2H_SEASONS + 1
+    row = conn.execute(_V5_H2H_SQL, (code_a, code_a, season_min, season,
+                                 code_a, code_b, code_b, code_a)).fetchone()
+    if row and row[0]:
+        return {"games": row[0], "margin": row[1] or 0.0}
+    return {"games": 0, "margin": 0.0}
+
+
+def v5_predict_match(conn, season, hcode, acode):
+    league = _v5_league_dist(conn, season)
+    if league is None:
+        return {"error": "League averages not available"}
+    h = _v5_team_profile(conn, hcode, season, league)
+    a = _v5_team_profile(conn, acode, season, league)
+    for prof in (h, a):
+        if any(prof[k] is None for k in V5_KEYS):
+            return {"error": "Team profile incomplete"}
+
+    # 1. Opponent adjusted simulation: expected points of each team from its own
+    #    attack, the opponent's defense and the pace of the game.
+    L = league["avg_ortg"]
+    pace = (h["avg_pace"] + a["avg_pace"]) / 2
+    mu_h = pace * (h["avg_ortg"] + a["avg_drtg"] - L) / 100
+    mu_a = pace * (a["avg_ortg"] + h["avg_drtg"] - L) / 100
+    seed = zlib.crc32(f"{season}|RS|{hcode}|{acode}|v5".encode())
+    rng = np.random.default_rng(seed)
+    hs = rng.normal(mu_h, h["std_pts"], V5_N_SIMS)
+    as_ = rng.normal(mu_a, a["std_pts"], V5_N_SIMS)
+    mc_raw = float(np.mean(hs > as_))
+
+    # 2. Season signal: 60% simulation, 40% win percentage
+    h_wp = _v5_blended_win_rate(conn, hcode, season)
+    a_wp = _v5_blended_win_rate(conn, acode, season)
+    season_prob = _v5_logistic(h_wp - a_wp)
+    current = 0.6 * mc_raw + 0.4 * season_prob
+
+    # 3. Head to head over 4 seasons (neutral under 4 meetings)
+    g = _v5_h2h(conn, hcode, acode, season)
+    h2h_prob = 0.5
+    if g["games"] >= V5_H2H_MIN_GAMES:
+        reliability = min(1.0, g["games"] / 10.0)
+        raw = _v5_logistic(g["margin"] / 15.0)
+        h2h_prob = 0.5 + reliability * (raw - 0.5)
+
+    # 4. Style: net rating gap (ORTG minus DRTG) between the two teams
+    h_net = h["avg_ortg"] - h["avg_drtg"]
+    a_net = a["avg_ortg"] - a["avg_drtg"]
+    style = _v5_logistic((h_net - a_net) / 40.0)
+
+    # 5. Weighted average on a neutral court, then the home court shift
+    neutral = _v5_clamp(V5_W_SEASON * current + V5_W_H2H * h2h_prob + V5_W_STYLE * style)
+    p_home = _v5_clamp(_v5_sigmoid(_v5_logit(neutral) + V5_HOME_SHIFT))
+
+    return {
+        "home_prob": round(p_home, 3),
+        "away_prob": round(1 - p_home, 3),
+        "mc_raw": round(mc_raw, 3),
+        "components": {
+            "current_season": round(current, 3),
+            "season_prob": round(season_prob, 3),
+            "h2h": round(h2h_prob, 3),
+            "style_matchup": round(style, 3),
+            "neutral_court": round(neutral, 3),
+            "home_shift": round(V5_HOME_SHIFT, 3),
+            "exp_pts_home": round(mu_h, 1),
+            "exp_pts_away": round(mu_a, 1),
+            "home_games": h["games"],
+            "away_games": a["games"],
+            "home_prior": h["prior"],
+            "away_prior": a["prior"],
+            "h2h_games": g["games"],
+        },
+    }
+
+
+# =============================================================================
+# DISPATCHER: version 5 for regular season games, previous model otherwise
+# =============================================================================
+@st.cache_data(ttl=300)
+def predict_by_gamecode(gamecode: int, season: int) -> dict:
+    conn = get_conn()
+    row = conn.execute("""
+        SELECT round, homecode, awaycode
+        FROM schedule
+        WHERE Season = ?
+          AND CAST(SUBSTR(gamecode, INSTR(gamecode, '_') + 1) AS INTEGER) = ?
+    """, (season, gamecode)).fetchone()
+    if row and row[0] == "RS":
+        return v5_predict_match(conn, season, row[1], row[2])
+    return _predict_legacy(gamecode, season)
 
 
 # =============================================================================
@@ -1162,11 +1414,11 @@ def render_win_probability(pred: dict, home_disp: str, away_disp: str,
     with st.popover("How is this calculated?"):
         if round_ == "RS":
             st.markdown(
-                "The win probability combines multiple signals: each team's current season "
-                "efficiency profile, their head-to-head history over the last 4 seasons, "
-                "home court advantage, and offensive/defensive style matchup. "
-                "Monte Carlo simulation runs thousands of iterations to model the full range "
-                "of possible outcomes based on each team's scoring distribution."
+                "The win probability combines three signals: each team's season performance, "
+                "their head to head history over the last 4 seasons, and their style matchup. "
+                "The season signal comes from a Monte Carlo simulation of 10,000 games based on "
+                "each team's attack, the opponent's defense and the pace of the game. "
+                "The home court edge observed in past games is applied last."
             )
         elif round_ == "FF":
             st.markdown(
@@ -2553,47 +2805,59 @@ a better profile.
         """
 The bar under the tables appears for games that have not been played yet. It is called
 **Win probability** in the regular season and the Play-In, and **Match edge** in the
-playoffs and the Final Four. It appears once both teams have played at least one game
-this season.
+playoffs and the Final Four.
 
-**Step 1: the simulation.** For each team, the model builds a scoring profile: its average
-points per game and how much its scores vary from one game to the next. In the regular
-season, the profile comes from this season's games. Early in the season, when a team has
-very few games, the model also draws on the previous season. In the postseason, the profile
-comes from postseason games of the last four seasons, and falls back to the regular season
-when a team has too few. The model then plays the game 10,000 times, drawing a random score
-for each team from its own profile each time. This is a Monte Carlo simulation: repeat a
-random experiment many times and count how often each outcome happens. The share of
-simulated games won by a team is its simulation result.
+#### Regular season
 
-**Step 2: four signals.** The simulation result is not used alone. The final probability
-combines four signals:
+**Step 1: team profiles.** For each team, the model builds a profile made of its offensive
+rating, its defensive rating, its pace and how much its scores vary from one game to the next.
+The profile mixes this season's games with the previous season's. The weight of this season grows
+with every game played and reaches 100% after 12 games. A team with no previous season in the
+EuroLeague is pulled toward the league average instead, so that two or three games cannot
+dominate the estimate.
 
-1. **Current season performance.** The simulation result, blended with each team's win
-   percentage this season. In the regular season this signal carries the largest weight.
-2. **Head to head history.** The results of the last four seasons between the two teams.
-   The average margin is turned into a probability, and the more meetings there are, the more
-   this signal counts. With fewer than four meetings, it stays neutral.
-3. **Home court advantage.** A fixed bonus for the home team, larger in the postseason,
-   and removed at the Final Four because games are played on a neutral court.
-4. **Style matchup.** The home team's offense against the away team's defense, compared
-   with the away team's offense against the home team's defense.
+**Step 2: the simulation.** The model estimates how many points each team is expected to score
+against this specific opponent, using its own attack, the opponent's defense and the pace of the
+game. It then plays the game 10,000 times, drawing a random score for each team around those
+expectations. This is a Monte Carlo simulation: repeat a random experiment many times and count
+how often each outcome happens. The share of simulated games won by a team is its simulation result.
 
-**Step 3: the series (playoffs only).** In a playoff series, the results of the games
-already played are added as a fifth signal, and games played later count more than earlier
-ones. The weight of this signal grows with each game: 20% after one game, 35% after two,
-45% after three, 50% after four and 55% after five or more. The other four signals share
-the remaining weight.
+**Step 3: three signals on a neutral court.** The simulation result is not used alone. The
+probability on a neutral court combines three signals (weights rounded):
+
+1. **Season performance** (50%). 60% of this signal is the simulation result and 40% is built from
+   each team's win percentage, mixed with the previous season in the same way as the profiles.
+2. **Head to head history** (31%). The results of the last four seasons between the two teams. The
+   average margin is turned into a probability, and the more meetings there are, the more this
+   signal counts. With fewer than four meetings, it stays neutral.
+3. **Style matchup** (19%). The gap in net rating (offensive rating minus defensive rating) between
+   the two teams.
+
+**Step 4: home court.** Home court advantage is applied last. It moves the probability toward the
+home team by the edge observed in past games: home teams won 823 of the 1,298 regular season games
+played from 2022 to 2025 (63.4%). Two teams of equal strength therefore get about 63% for the home team.
 
 The final probability is always kept between 2% and 98%.
 
-**How to read it.** A 54% probability means that, according to the model, the team wins
-about 54 games out of 100 in this situation. It is an estimate of likelihood, not a
-prediction of the result. The model works from team level results only: it does not
-know about injuries, lineups or rest days.
+#### Play-In, Playoffs and Final Four
+
+These games use the earlier version of the model. The profile of each team comes from postseason
+games of the last four seasons, and falls back to the regular season when a team has too few. The
+model plays the game 10,000 times, drawing a random score for each team from its own profile each
+time. The result is combined with four signals: current season performance, head to head history
+over the last four seasons, home court advantage (a fixed bonus, larger than in the regular season
+and removed at the Final Four because games are played on a neutral court) and style matchup.
+
+In a playoff series, the results of the games already played are added as a fifth signal, and games
+played later count more than earlier ones. The weight of this signal grows with each game: 20% after
+one game, 35% after two, 45% after three, 50% after four and 55% after five or more. The other
+signals share the remaining weight.
+
+**How to read it.** A 54% probability means that, according to the model, the team wins about 54
+games out of 100 in this situation. It is an estimate of likelihood, not a prediction of the result.
+The model works from team level results only: it does not know about injuries, lineups or rest days.
 """
     )
-
 
 def _methodology_game_flow():
     st.markdown("## Reading Game Flow")
