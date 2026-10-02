@@ -50,6 +50,10 @@ EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
 CURRENT_SEASON = 2025
 ROLLING_WINDOW = 5
 
+# Interrupteurs des Shot Maps : mettre False pour les desactiver sans retirer le code.
+SHOTMAPS_IN_MATCH = True    # bloc "Shot Map" sous Impact Pulse dans un match
+SHOTMAPS_TAB = True         # onglet "Shot Maps"
+
 # Brand typeface for exported PNGs (Barlow Condensed, matches the X banner).
 # Drop the .ttf files in a "fonts" folder next to app.py; falls back to a
 # plain bold sans-serif automatically if they are not present.
@@ -2341,19 +2345,20 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         )
 
         # ── Shot Map ──────────────────────────────────────────────────────
-        shotmap_ui.render_match_shotmaps(
-            conn=get_conn(),
-            season=rnd_season,
-            game_code=gc_num,
-            home_code=hcode,
-            away_code=acode,
-            home_disp=home_disp,
-            away_disp=away_disp,
-            round_label=round_label_long,
-            card_index=card_index,
-            elstatslab_logo=ELSTATSLAB_LOGO,
-            team_logo_fn=logo_path,
-        )
+        if SHOTMAPS_IN_MATCH:
+            shotmap_ui.render_match_shotmaps(
+                conn=get_conn(),
+                season=rnd_season,
+                game_code=gc_num,
+                home_code=hcode,
+                away_code=acode,
+                home_disp=home_disp,
+                away_disp=away_disp,
+                round_label=round_label_long,
+                card_index=card_index,
+                elstatslab_logo=ELSTATSLAB_LOGO,
+                team_logo_fn=logo_path,
+            )
 
     st.divider()
 
@@ -3115,15 +3120,6 @@ league average, and the color simply follows the FG%.
 In the Shot Maps tab, a heatmap of shot density is available once a team has at least ten
 games in the selection. With fewer games, the density mostly reflects chance, so only the zone
 view is offered. In a single game view, only the zone view is shown.
-
-### When the shot locations look incomplete
-
-For a few games, the official data contains no corner three at all, even though many three
-pointers were taken, which almost never happens in a real game. When a game has at least 20
-three point attempts and not a single one in the corner, the site flags it: a warning appears
-above the map, and the Corner 3 zone reads Not recorded instead of No shots. These games are
-also left out of the league average used for the colors. A game checked against the official
-shot chart and found identical is no longer flagged.
 """
     )
 
@@ -3175,13 +3171,16 @@ def main():
         team_cards.render()
 
     with tab_shots:
-        shotmap_ui.render_shot_maps_tab(
-            conn=get_conn(),
-            seasons=load_seasons(),
-            name_fn=lambda c: display_name(c, c),
-            elstatslab_logo=ELSTATSLAB_LOGO,
-            team_logo_fn=logo_path,
-        )
+        if SHOTMAPS_TAB:
+            shotmap_ui.render_shot_maps_tab(
+                conn=get_conn(),
+                seasons=load_seasons(),
+                name_fn=lambda c: display_name(c, c),
+                elstatslab_logo=ELSTATSLAB_LOGO,
+                team_logo_fn=logo_path,
+            )
+        else:
+            st.info("Shot Maps are temporarily unavailable.")
 
     with tab_method:
         render_methodology()
