@@ -123,11 +123,19 @@ def load_shots(source, table, season, team=None, game_code=None):
 
 
 def prepare_shots(df):
-    df = df.dropna(subset=["x", "y", "action"])
-    df = df[(df["y"].between(-50, 1300)) & (df["x"].between(-750, 750))].copy()
+    """Prepare les tirs. Tous les tirs de champ valides sont conserves, meme ceux hors du terrain
+    dessine (lancers de l'autre moitie de terrain, tirs derriere le panneau) : ils comptent dans les
+    totaux et dans les zones. Seuls les tirs sans position (x ou y vide) restent hors des zones et
+    du dessin, mais comptent dans les totaux."""
+    df = df.dropna(subset=["action"]).copy()
+    df = df[df["action"].astype(str).str.match(r"^[23]FG[MA]$")].copy()
     df["made"] = df["action"].str.endswith("M")
     df["is3"] = df["action"].str.startswith("3")
-    df["zone"] = [classify_zone(x, y, i) for x, y, i in zip(df["x"], df["y"], df["is3"])]
+    df["located"] = df["x"].notna() & df["y"].notna()
+    df["zone"] = [classify_zone(x, y, i) if ok else None
+                  for x, y, i, ok in zip(df["x"], df["y"], df["is3"], df["located"])]
+    # dans la fenetre de la heatmap (les lancers de loin fausseraient la densite)
+    df["in_view"] = df["located"] & df["x"].between(-750, 750) & df["y"].between(-157, 1300)
     return df.reset_index(drop=True)
 
 
@@ -276,7 +284,8 @@ def draw_court(ax, color=LINE, lw=3, ymin=-165):
 # ------------------------------------------------------------------ LAYERS
 def _heat_layer(ax, df):
     from scipy.stats import gaussian_kde   # import local : scipy n'est requis que pour la heatmap
-    kde = gaussian_kde(np.vstack([df["x"], df["y"]]), bw_method=0.22)
+    v = df[df["in_view"]]
+    kde = gaussian_kde(np.vstack([v["x"], v["y"]]), bw_method=0.22)
     X, Y = np.meshgrid(np.linspace(-750, 750, 400), np.linspace(-100, VIEW_Y_MAX - 10, 400))
     Zd = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(X.shape)
     Zs = np.sqrt(Zd)   # racine : evite que le cercle sous le panier ecrase le reste
@@ -364,6 +373,7 @@ def _zone_text(ax, zs, k, labels, arrows, empty_text="No shots"):
 
 def _points_layer(ax, df, alpha, k):
     """Reussi : croix verte. Rate : rond rouge."""
+    df = df[df["located"]]
     made, missed = df[df["made"]], df[~df["made"]]
     if len(missed):
         ax.scatter(missed["x"], missed["y"], c="#9b2d22", s=40 * k, alpha=alpha, zorder=10,
@@ -443,7 +453,8 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
     """Retourne une Figure carree. 'heat' bascule en 'zones' sous MIN_GAMES_KDE matchs."""
     k = figsize[0] / 12.0
     n_games = df["GameCode"].nunique() if len(df) else 0
-    if mode == "heat" and (n_games < MIN_GAMES_KDE or len(df) <= 5):
+    if mode == "heat" and (n_games < MIN_GAMES_KDE or (len(df) and int(df["in_view"].sum()) <= 5)
+                           or len(df) <= 5):
         mode = "zones"
 
     fig = plt.figure(figsize=figsize)
@@ -489,6 +500,11 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
     _place_logo(fig, logo_path, [0.035, 0.895, 0.12, 0.085])
     _place_logo(fig, team_logo_path, [0.845, 0.895, 0.12, 0.085])
 
+    n_unloc = int((~df["located"]).sum()) if len(df) else 0
+    if n_unloc and not note:
+        word = "shot has" if n_unloc == 1 else "shots have"
+        fig.text(0.5, 0.080, f"{n_unloc} {word} no recorded location: counted in the totals, not in the zones.",
+                 ha="center", va="center", fontsize=14 * k, fontproperties=F_SEMI, color="#777777")
     if note:
         fig.text(0.5, 0.080, note, ha="center", va="center", fontsize=14 * k,
                  fontproperties=F_SEMI, color="#b03a2e")
