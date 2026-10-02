@@ -5,6 +5,7 @@ Module pur (matplotlib + pandas), sans Streamlit : utilise par shotmap_ui.py
 dans l'app et par le CLI en bas de fichier pour les exports X.
 """
 import sqlite3
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -382,15 +383,28 @@ def _scale_bar(fig, k, mode, ref_stats, y0=0.100):
              fontproperties=F_SEMI, color=TXT)
 
 
-def _load_logo(path):
-    """Logo compose sur fond blanc (RGB), recadre sur son contenu, ou None.
+LOGO_MAX_PX = 400      # un logo est affiche a ~220 px de large : inutile de garder plus
+LOGO_MAX_PIXELS = 25_000_000   # au dela (5000 x 5000), le logo est ignore plutot que de risquer l'app
 
-    Meme principe que les exports de app.py : on aplatit la transparence avant
-    de redimensionner, sinon les pixels semi transparents (RGB noir dessous)
-    forment un halo sombre autour du logo.
+
+@lru_cache(maxsize=32)
+def _load_logo(path):
+    """Logo compose sur fond blanc (RGB uint8), reduit et recadre, ou None.
+
+    Meme principe que les exports de app.py : on aplatit la transparence avant de redimensionner,
+    sinon les pixels semi transparents (RGB noir dessous) forment un halo sombre. Le logo est
+    reduit des la lecture (LOGO_MAX_PX) et mis en cache : un PNG haute resolution ne coute plus
+    des centaines de Mo de memoire a chaque rendu.
     """
     try:
-        img = np.array(Image.open(path).convert("RGBA")).astype(float) / 255
+        with Image.open(path) as probe:          # lit seulement l'en-tete : pas de decodage
+            w, h = probe.size
+        if w * h > LOGO_MAX_PIXELS:
+            print(f"[shotmap] logo ignore, trop grand ({w} x {h}) : {path}", flush=True)
+            return None
+        im = Image.open(path).convert("RGBA")
+        im.thumbnail((LOGO_MAX_PX, LOGO_MAX_PX), Image.LANCZOS)
+        img = np.asarray(im, dtype=np.float32) / 255.0
     except Exception:
         return None
     alpha = img[:, :, 3]
@@ -400,7 +414,8 @@ def _load_logo(path):
         sl = (slice(ys.min(), ys.max() + 1), slice(xs.min(), xs.max() + 1))
         img, alpha = img[sl], alpha[sl]
     a = alpha[:, :, None]
-    return img[:, :, :3] * a + np.ones_like(img[:, :, :3]) * (1 - a)
+    rgb = img[:, :, :3] * a + (1.0 - a)
+    return (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
 
 
 def _place_logo(fig, path, rect):
