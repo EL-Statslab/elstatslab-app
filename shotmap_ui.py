@@ -10,6 +10,7 @@ d'abord en miniature ; la taille normale (1800 x 1800, telechargeable) n'est pro
 sur "View full size", pour une seule equipe a la fois. Cela evite de surcharger l'app a chaque
 ouverture d'un match.
 """
+import faulthandler
 import gc
 import io
 
@@ -19,6 +20,35 @@ import streamlit as st
 
 import shootmap as sm
 
+try:   # en cas de plantage dur (segfault), la pile Python est ecrite dans les journaux
+    faulthandler.enable()
+except Exception:
+    pass
+
+
+
+SEP_PX = 6             # trait de separation entre les deux cartes dans l'image cote a cote
+
+
+def _side_by_side(png_left: bytes, png_right: bytes) -> bytes:
+    """Colle deux images PNG cote a cote sur fond blanc (par defaut 3600 x 1800 px)."""
+    from PIL import Image, ImageDraw
+
+    with Image.open(io.BytesIO(png_left)) as a, Image.open(io.BytesIO(png_right)) as b:
+        a, b = a.convert("RGB"), b.convert("RGB")
+        canvas = Image.new("RGB", (a.width + SEP_PX + b.width, max(a.height, b.height)), "white")
+        canvas.paste(a, (0, 0))
+        canvas.paste(b, (a.width + SEP_PX, 0))
+        x = a.width + SEP_PX // 2
+        ImageDraw.Draw(canvas).line([(x, 60), (x, canvas.height - 60)], fill=(224, 224, 224), width=SEP_PX)
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _lazy_download_supported() -> bool:
+    """Les versions recentes de Streamlit acceptent une fonction comme donnees du bouton."""
+    return "callable" in (st.download_button.__doc__ or "").lower()
 
 
 def _mem_mb():
@@ -56,6 +86,13 @@ def _log_mem(tag: str):
     print(f"[shotmap] {tag} | process {fmt(rss)} MB | container {fmt(used)} / {fmt(limit)} MB",
           flush=True)
 
+
+# Test de diagnostic : mettre False pour afficher les cartes sans le logo de l'equipe.
+USE_TEAM_LOGOS = True
+
+# Vue match : True = les miniatures s'affichent des l'ouverture du match ; False = il faut d'abord
+# cliquer sur "Show shot maps" (utile si l'app devait un jour manquer de memoire).
+SHOW_ON_OPEN = True
 
 THUMB_DPI = 60         # miniature dans la vue match (720 px)
 TAB_DPI = 75           # apercu dans l'onglet Shot Maps (900 px)
@@ -102,7 +139,8 @@ def _shotmap_png(_conn, table: str, season: int, team: str, game_code, mode: str
     _log_mem(f"avant rendu {team} match={game_code} dpi={dpi}")
     fig = sm.render_shootmap(
         df, team, subtitle, mode=mode, ref_stats=_league_context(_conn, table, season)[0],
-        logo_path=logo_path or None, team_logo_path=team_logo_path or None,
+        logo_path=logo_path or None,
+        team_logo_path=(team_logo_path or None) if USE_TEAM_LOGOS else None,
         team_name=team_name, note=note or None,
     )
     buf = io.BytesIO()
@@ -131,7 +169,7 @@ def render_match_shotmaps(conn, season: int, game_code: int,
             return
 
         show_key = f"sm_show_{card_index}_{game_code}"
-        if not st.session_state.get(show_key):
+        if not SHOW_ON_OPEN and not st.session_state.get(show_key):
             st.caption("Where each team shot in this game, coloured against the league average.")
             if st.button("Show shot maps", key=f"sm_show_btn_{card_index}_{game_code}"):
                 st.session_state[show_key] = True
@@ -169,6 +207,30 @@ def render_match_shotmaps(conn, season: int, game_code: int,
                 elif st.button("🔍 View full size", key=f"sm_big_{card_index}_{game_code}_{code}"):
                     st.session_state[full_key] = code
                     st.rerun()
+
+        # Image des deux cartes cote a cote, en pleine qualite (pratique pour X).
+        if all(_shotmap_png(*args_by_code[c], dpi=THUMB_DPI) is not None for c, _, _ in teams):
+            def _both_png():
+                left = _shotmap_png(*args_by_code[home_code], dpi=FULL_DPI)
+                right = _shotmap_png(*args_by_code[away_code], dpi=FULL_DPI)
+                return _side_by_side(left, right)
+
+            both_name = f"ShotMaps_{home_code}_vs_{away_code}_G{game_code}.png"
+            both_key = f"sm_both_{card_index}_{game_code}"
+            if _lazy_download_supported():
+                st.download_button(
+                    "📥 Download both side by side (full quality)", data=_both_png,
+                    file_name=both_name, mime="image/png", key=f"{both_key}_dl",
+                )
+            else:    # anciennes versions de Streamlit : generation au clic, puis telechargement
+                if both_key not in st.session_state:
+                    if st.button("📥 Generate both side by side", key=f"{both_key}_gen"):
+                        with st.spinner("Generating image..."):
+                            st.session_state[both_key] = _both_png()
+                        st.rerun()
+                if both_key in st.session_state:
+                    st.download_button("📥 Download both side by side", data=st.session_state[both_key],
+                                       file_name=both_name, mime="image/png", key=f"{both_key}_dl")
 
         chosen = st.session_state.get(full_key)
         if chosen in args_by_code:
