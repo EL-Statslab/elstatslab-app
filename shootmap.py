@@ -32,6 +32,10 @@ RA_LABEL = "wing"         # legende de la Restricted Area : "wing" (aile gauche)
 VIEW_Y_MAX = 900          # terrain coupe a cette hauteur (les stats incluent tous les tirs)
 MIN_GAMES_KDE = 10        # la heatmap n'apparait qu'a partir de ce nombre de matchs
 MIN_GAMES_LEAGUE = 10     # reference ligue utilisee seulement au dela de ce nombre de matchs
+# Signalement des matchs dont les corners semblent absents (voir suspect_games_from_df).
+# False : aucun avertissement, "No shots" pour une zone vide, et tous les matchs comptent dans la
+# reference ligue (les donnees sont celles du flux officiel). True : comportement de controle.
+FLAG_SUSPECT_GAMES = False
 MIN_THREES_SUSPECT = 20   # match a 3 points >= ce seuil (les 2 equipes) et 0 corner : donnees suspectes
 # Matchs sans corner controles contre le shot chart officiel de l'EuroLeague (saison, game code) :
 # les donnees de la base reproduisent la source, donc plus d'avertissement pour eux.
@@ -153,12 +157,14 @@ def suspect_games_from_df(lg):
 
 def competition_suspect_games(source, table, season):
     """Matchs suspects a signaler (hors VERIFIED_GAMES)."""
+    if not FLAG_SUSPECT_GAMES:
+        return []
     return [g for g in suspect_games_from_df(load_shots(source, table, season))
             if (season, g) not in VERIFIED_GAMES]
 
 
 def suspect_note(games):
-    if not games:
+    if not FLAG_SUSPECT_GAMES or not games:
         return None
     word = "game" if len(games) == 1 else "games"
     ids = ", ".join(str(g) for g in games)
@@ -171,7 +177,7 @@ def league_context(source, table, season):
     lg = load_shots(source, table, season)
     if lg.empty:
         return None, []
-    raw = suspect_games_from_df(lg)
+    raw = suspect_games_from_df(lg) if FLAG_SUSPECT_GAMES else []
     kept = lg[~lg["GameCode"].isin(raw)]
     ref = zone_stats(kept) if (not kept.empty and kept["GameCode"].nunique() >= MIN_GAMES_LEAGUE) else None
     shown = [g for g in raw if (season, g) not in VERIFIED_GAMES]
@@ -185,7 +191,8 @@ def league_reference(source, table, season):
     lg = load_shots(source, table, season)
     if lg.empty:
         return None
-    lg = lg[~lg["GameCode"].isin(suspect_games_from_df(lg))]
+    if FLAG_SUSPECT_GAMES:
+        lg = lg[~lg["GameCode"].isin(suspect_games_from_df(lg))]
     if lg.empty or lg["GameCode"].nunique() < MIN_GAMES_LEAGUE:
         return None
     return zone_stats(lg)
