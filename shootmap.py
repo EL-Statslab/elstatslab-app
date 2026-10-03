@@ -349,7 +349,8 @@ def _layout():
     return -165, [0.05, 0.145, 0.90, 0.63], 0.100, labels, arrows
 
 
-def _zone_text(ax, zs, k, labels, arrows, empty_text="No shots"):
+def _zone_text(ax, zs, k, labels, arrows, empty_text="No shots", show_freq=False):
+    total = int(zs["fga"].sum())
     for z, (x, y, cap, f) in labels.items():
         row = zs.loc[z]
         empty = int(row["fga"]) == 0
@@ -365,10 +366,45 @@ def _zone_text(ax, zs, k, labels, arrows, empty_text="No shots"):
             ax.text(x, y - 56 * f, f"{int(row['fgm'])}/{int(row['fga'])}", ha="center", va="center",
                     fontsize=18 * k * f, fontproperties=F_SEMI, color="#444444", zorder=20,
                     path_effects=PE)
+            if show_freq and total:
+                ax.text(x, y - 98 * f, f"{row['fga'] / total * 100:.0f}% of shots", ha="center",
+                        va="center", fontsize=14 * k * f, fontproperties=F_REG, color="#555555",
+                        zorder=20, path_effects=PE)
         if z in arrows:
             (sx, sy), (tx, ty) = arrows[z]
             ax.annotate("", xy=(tx, ty), xytext=(sx, sy),
                         arrowprops=dict(arrowstyle="-|>", color="#555555", lw=2.2 * k), zorder=20)
+
+
+def _hex_layer(ax, df, radius=40.0, min_count=2):
+    """Hexagones centres sur les zones de tir : la taille indique la frequence (sans tir par tir)."""
+    from collections import Counter
+    from matplotlib.patches import RegularPolygon
+
+    v = df[df["in_view"] & (df["y"] <= VIEW_Y_MAX - 10)]
+    if v.empty:
+        return
+    s3 = np.sqrt(3.0)
+    x, y = v["x"].to_numpy(dtype=float), v["y"].to_numpy(dtype=float)
+    fx, fz = (s3 / 3 * x - y / 3) / radius, (2 / 3 * y) / radius          # coordonnees axiales
+    fy = -fx - fz
+    rx, ry, rz = np.round(fx), np.round(fy), np.round(fz)                   # arrondi cubique
+    dx, dy, dz = np.abs(rx - fx), np.abs(ry - fy), np.abs(rz - fz)
+    fix_x = (dx > dy) & (dx > dz)
+    fix_y = ~fix_x & (dy > dz)
+    rx = np.where(fix_x, -ry - rz, rx)
+    rz = np.where(~fix_x & ~fix_y, -rx - ry, rz)
+    counts = Counter(zip(rx.astype(int), rz.astype(int)))
+    cmax = max(counts.values())
+    for (q, r), c in counts.items():
+        if c < min_count:
+            continue
+        cx, cy = radius * s3 * (q + r / 2), radius * 1.5 * r
+        size = radius * (0.30 + 0.70 * np.sqrt(c / cmax)) * 0.96
+        if abs(cx) + size > 748 or cy - size < -155:      # pas d'hexagone qui deborde du terrain
+            continue
+        ax.add_patch(RegularPolygon((cx, cy), 6, radius=size, facecolor=HEX_COLOR,
+                                    edgecolor="white", linewidth=0.6, alpha=HEX_ALPHA, zorder=3))
 
 
 def _points_layer(ax, df, alpha, k):
@@ -400,6 +436,8 @@ def _scale_bar(fig, k, mode, ref_stats, y0=0.100):
              fontproperties=F_SEMI, color=TXT)
 
 
+HEX_COLOR = "#333333"    # couleur des hexagones : gris neutre (alternatives testees : orange "#e8491c", violet, ambre)
+HEX_ALPHA = 0.5
 LOGO_MAX_PX = 400      # un logo est affiche a ~220 px de large : inutile de garder plus
 LOGO_MAX_PIXELS = 25_000_000   # au dela (5000 x 5000), le logo est ignore plutot que de risquer l'app
 
@@ -449,7 +487,7 @@ def _place_logo(fig, path, rect):
 # ------------------------------------------------------------------ RENDER
 def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_points=True,
                     logo_path=None, team_logo_path=None, team_name=None,
-                    figsize=(12, 12), watermark=None, note=None):
+                    figsize=(12, 12), watermark=None, note=None, overlay="none", show_freq=False):
     """Retourne une Figure carree. 'heat' bascule en 'zones' sous MIN_GAMES_KDE matchs."""
     k = figsize[0] / 12.0
     n_games = df["GameCode"].nunique() if len(df) else 0
@@ -469,8 +507,10 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
         _heat_layer(ax, df)
     else:
         _zone_layer(ax, zs, ref_stats)
+        if overlay == "hex":
+            _hex_layer(ax, df)
         _zone_text(ax, zs, k, labels, arrows,
-                   empty_text="Not recorded" if note else "No shots")
+                   empty_text="Not recorded" if note else "No shots", show_freq=show_freq)
     if show_points and len(df):
         _points_layer(ax, df, alpha=0.75 if mode == "zones" else 0.8, k=k)
         h, l = ax.get_legend_handles_labels()
@@ -547,6 +587,8 @@ if __name__ == "__main__":
     COMPET = "Super Cup"      # "EuroLeague", "EuroCup" ou "Super Cup"
     MODE = "zones"            # "zones" ou "heat" (heat seulement a partir de 10 matchs)
     GAME_CODE = None          # un code de match pour un seul match
+    SHOW_POINTS = True        # croix vertes et ronds rouges (utile pour un match, pas pour une saison)
+    OVERLAY = "none"          # "hex" : hexagones de frequence (utile pour plusieurs matchs)
 
     table = COMPETITIONS[COMPET]
     data = load_shots(DB_PATH, table, SEASON, TEAM, GAME_CODE)
@@ -564,7 +606,7 @@ if __name__ == "__main__":
         if ctx:
             subtitle = f"{COMPET} {ctx[0]} | vs {ctx[1]}"
     fig = render_shootmap(data, TEAM, subtitle, mode=MODE,
-                          ref_stats=ref, logo_path=LOGO_PATH,
+                          ref_stats=ref, logo_path=LOGO_PATH, show_points=SHOW_POINTS, overlay=OVERLAY,
                           team_logo_path=LOGOS_DIR / TEAM_LOGO_FILES.get(TEAM, ""), note=note)
     out = rf"{OUT_DIR}\shootmap_{TEAM}_{COMPET.replace(' ', '')}{SEASON}_{MODE}.png"
     fig.savefig(out, dpi=150, facecolor=BG)
