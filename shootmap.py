@@ -407,6 +407,26 @@ def _hex_layer(ax, df, radius=40.0, min_count=2):
                                     edgecolor="white", linewidth=0.6, alpha=HEX_ALPHA, zorder=3))
 
 
+def _hex_legend(fig, k, y=0.803):
+    """Legende des hexagones : trois tailles, de peu de tirs a beaucoup de tirs."""
+    from matplotlib.patches import RegularPolygon
+
+    lax = fig.add_axes([0.435, y - 0.016, 0.13, 0.032])
+    w_in, h_in = 0.13 * fig.get_figwidth(), 0.032 * fig.get_figheight()
+    lax.set_xlim(0, w_in / h_in)
+    lax.set_ylim(0, 1)
+    lax.set_aspect("equal")
+    lax.axis("off")
+    cx = w_in / h_in
+    for frac, r in zip((0.16, 0.5, 0.84), (0.21, 0.33, 0.46)):
+        lax.add_patch(RegularPolygon((cx * frac, 0.5), 6, radius=r, facecolor=HEX_COLOR,
+                                     edgecolor="white", linewidth=0.6, alpha=HEX_ALPHA))
+    fig.text(0.425, y, "Fewer shots", ha="right", va="center", fontsize=19 * k,
+             fontproperties=F_SEMI, color=TXT)
+    fig.text(0.575, y, "More shots", ha="left", va="center", fontsize=19 * k,
+             fontproperties=F_SEMI, color=TXT)
+
+
 def _points_layer(ax, df, alpha, k):
     """Reussi : croix verte. Rate : rond rouge."""
     df = df[df["located"]]
@@ -521,6 +541,9 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
             fig.legend([h[i] for i in order], [l[i] for i in order], loc="center",
                        bbox_to_anchor=(0.5, 0.803), ncol=2, frameon=False, prop=lp,
                        labelcolor=TXT, handletextpad=0.4, columnspacing=2.5, markerscale=1.4)
+
+    if overlay == "hex" and mode == "zones" and len(df):
+        _hex_legend(fig, k)
 
     s = summary_stats(df)
     pct2 = (s["2pm"] / s["2pa"] * 100) if s["2pa"] else 0
