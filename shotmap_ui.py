@@ -13,6 +13,7 @@ ouverture d'un match.
 import faulthandler
 import gc
 import io
+import time
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -44,11 +45,6 @@ def _side_by_side(png_left: bytes, png_right: bytes) -> bytes:
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()
-
-
-def _lazy_download_supported() -> bool:
-    """Les versions recentes de Streamlit acceptent une fonction comme donnees du bouton."""
-    return "callable" in (st.download_button.__doc__ or "").lower()
 
 
 def _mem_mb():
@@ -132,22 +128,24 @@ def _league_context(_conn, table: str, season: int):
 @st.cache_data(ttl=600, show_spinner=False, max_entries=24)
 def _shotmap_png(_conn, table: str, season: int, team: str, game_code, mode: str,
                  team_name: str, subtitle: str, logo_path: str, team_logo_path: str, note: str = "",
-                 dpi: int = FULL_DPI):
+                 dpi: int = FULL_DPI, show_points: bool = True, overlay: str = "none"):
     df = _shots(_conn, table, season, team, game_code)
     if df.empty:
         return None
     _log_mem(f"avant rendu {team} match={game_code} dpi={dpi}")
+    t0 = time.time()
     fig = sm.render_shootmap(
         df, team, subtitle, mode=mode, ref_stats=_league_context(_conn, table, season)[0],
         logo_path=logo_path or None,
         team_logo_path=(team_logo_path or None) if USE_TEAM_LOGOS else None,
-        team_name=team_name, note=note or None,
+        team_name=team_name, note=note or None, show_points=show_points,
+        overlay=overlay,
     )
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=dpi, facecolor=sm.BG)
     plt.close(fig)
     gc.collect()
-    _log_mem(f"apres rendu {team} match={game_code} dpi={dpi}")
+    _log_mem(f"apres rendu {team} match={game_code} dpi={dpi} en {time.time() - t0:.1f} s")
     return buf.getvalue()
 
 
@@ -209,28 +207,21 @@ def render_match_shotmaps(conn, season: int, game_code: int,
                     st.rerun()
 
         # Image des deux cartes cote a cote, en pleine qualite (pratique pour X).
+        # Generee au clic dans l'execution normale de l'app (comme les autres exports), puis proposee
+        # au telechargement : la generation "differee" de Streamlit a donne une image mal composee.
         if all(_shotmap_png(*args_by_code[c], dpi=THUMB_DPI) is not None for c, _, _ in teams):
-            def _both_png():
-                left = _shotmap_png(*args_by_code[home_code], dpi=FULL_DPI)
-                right = _shotmap_png(*args_by_code[away_code], dpi=FULL_DPI)
-                return _side_by_side(left, right)
-
-            both_name = f"ShotMaps_{home_code}_vs_{away_code}_G{game_code}.png"
             both_key = f"sm_both_{card_index}_{game_code}"
-            if _lazy_download_supported():
-                st.download_button(
-                    "📥 Download both side by side (full quality)", data=_both_png,
-                    file_name=both_name, mime="image/png", key=f"{both_key}_dl",
-                )
-            else:    # anciennes versions de Streamlit : generation au clic, puis telechargement
-                if both_key not in st.session_state:
-                    if st.button("📥 Generate both side by side", key=f"{both_key}_gen"):
-                        with st.spinner("Generating image..."):
-                            st.session_state[both_key] = _both_png()
-                        st.rerun()
-                if both_key in st.session_state:
-                    st.download_button("📥 Download both side by side", data=st.session_state[both_key],
-                                       file_name=both_name, mime="image/png", key=f"{both_key}_dl")
+            both_name = f"ShotMaps_{home_code}_vs_{away_code}_G{game_code}.png"
+            if both_key not in st.session_state:
+                if st.button("📥 Generate both side by side (full quality)", key=f"{both_key}_gen"):
+                    with st.spinner("Generating image..."):
+                        left = _shotmap_png(*args_by_code[home_code], dpi=FULL_DPI)
+                        right = _shotmap_png(*args_by_code[away_code], dpi=FULL_DPI)
+                        st.session_state[both_key] = _side_by_side(left, right)
+                    st.rerun()
+            else:
+                st.download_button("📥 Download both side by side", data=st.session_state[both_key],
+                                   file_name=both_name, mime="image/png", key=f"{both_key}_dl")
 
         chosen = st.session_state.get(full_key)
         if chosen in args_by_code:
@@ -253,13 +244,13 @@ def render_match_shotmaps(conn, season: int, game_code: int,
 # ------------------------------------------------------------------ ONGLET SHOT MAPS
 def render_shot_maps_tab(conn, seasons: list, name_fn,
                          elstatslab_logo=None, team_logo_fn=None):
-    """Onglet : choisir competition, saison et equipe, comme dans Team Cards."""
-    st.caption("Where does a team shoot, and how well? Pick a competition and a team.")
+    """Onglet : choisir saison et equipe (EuroLeague uniquement, sans les points tir par tir)."""
+    st.caption("Where does a team shoot, and how well? Pick a season and a team.")
 
-    c1, c2, c3 = st.columns(3)
-    compet = c1.selectbox("Competition", list(sm.COMPETITIONS), key="sm_compet")
-    season = c2.selectbox("Season", seasons, key="sm_season")
+    compet = "EuroLeague"      # EuroCup et Super Cup : exports pour X uniquement, jamais sur le site
     table = sm.COMPETITIONS[compet]
+    c1, c2 = st.columns(2)
+    season = c1.selectbox("Season", seasons, key="sm_season")
 
     if not _has_table(conn, table):
         st.info(f"No {compet} shot data available yet.")
@@ -268,7 +259,7 @@ def render_shot_maps_tab(conn, seasons: list, name_fn,
     if not teams:
         st.info(f"No {compet} shots for season {season}.")
         return
-    team = c3.selectbox("Team", teams, format_func=name_fn, key="sm_team")
+    team = c2.selectbox("Team", teams, format_func=name_fn, key="sm_team")
 
     df = _shots(conn, table, int(season), team)
     if df.empty:
@@ -298,7 +289,7 @@ def render_shot_maps_tab(conn, seasons: list, name_fn,
     sel = (compet, int(season), team, pick)               # selection courante
     is_full = st.session_state.get("sm_tab_full") == sel
 
-    png = _shotmap_png(*args, dpi=FULL_DPI if is_full else TAB_DPI)
+    png = _shotmap_png(*args, dpi=FULL_DPI if is_full else TAB_DPI, show_points=False, overlay="hex")
     if png is None:
         st.info("No shots found for this selection.")
         return
