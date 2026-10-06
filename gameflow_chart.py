@@ -241,14 +241,14 @@ def _fit(img: np.ndarray, box_w: float, box_h: float, cx: float, cy: float):
     return cx - dw / 2, cy - dh / 2, cx + dw / 2, cy + dh / 2
 
 
-def _draw_team(ax, cx, code, name):
+def _draw_team(ax, cx, code, name, colour=NAVY):
     box_y = 160
-    _rbox(ax, cx - 58, box_y, 116, 116, "white", ec=RULE, r=22, z=2)
+    _rbox(ax, cx - 58, box_y, 116, 116, "white", ec=colour, r=22, lw=3.2, z=2)
     lp = _team_logo_path(code)
     if lp is not None:
         crest = _load_team_logo_on_white(lp)
         _image(ax, crest, *_fit(crest, 86, 86, cx, box_y + 58), z=3)
-    _fit_text(ax, cx, 306, name, min(30, 700 / max(len(name), 1)), BARLOW_BOLD, NAVY,
+    _fit_text(ax, cx, 306, name, min(30, 700 / max(len(name), 1)), BARLOW_BOLD, colour,
               max_w=330, ha="center")
 
 
@@ -304,8 +304,8 @@ def _render(data: dict, round_label: str = "") -> bytes:
     _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
 
     # ── Teams and final score ───────────────────────────────────────────
-    _draw_team(ax, 165, hc, hn)
-    _draw_team(ax, 835, ac, an)
+    _draw_team(ax, 165, hc, hn, COLOR_HOME)
+    _draw_team(ax, 835, ac, an, COLOR_AWAY)
     _text(ax, 478, 226, f"{fh}", 96, BARLOW_BOLD, COLOR_HOME, ha="right")
     _text(ax, 500, 222, "-", 70, BARLOW_REGULAR, GREY, ha="center")
     _text(ax, 522, 226, f"{fa}", 96, BARLOW_BOLD, COLOR_AWAY, ha="left")
@@ -362,9 +362,9 @@ def _render(data: dict, round_label: str = "") -> bytes:
         _text(ax, PX0 + 8, PY1 - 14, "Q1", 18, BARLOW_BOLD, GREY, ha="left")
 
     ax.add_patch(Rectangle((70, CARD_Y0 + 20), 8, 24, facecolor=COLOR_HOME, edgecolor="none", zorder=5))
-    _fit_text(ax, 90, CARD_Y0 + 33, f"{hn} ahead", 22, BARLOW_SEMIBOLD, NAVY, max_w=380)
+    _fit_text(ax, 90, CARD_Y0 + 33, hn, 22, BARLOW_SEMIBOLD, NAVY, max_w=380)
     ax.add_patch(Rectangle((70, CARD_Y1 - 44), 8, 24, facecolor=COLOR_AWAY, edgecolor="none", zorder=5))
-    _fit_text(ax, 90, CARD_Y1 - 31, f"{an} ahead", 22, BARLOW_SEMIBOLD, NAVY, max_w=380)
+    _fit_text(ax, 90, CARD_Y1 - 31, an, 22, BARLOW_SEMIBOLD, NAVY, max_w=380)
     _text(ax, 930, CARD_Y1 - 31, "Point differential", 20, BARLOW_REGULAR, GREY, ha="right")
 
     # ── Biggest runs ────────────────────────────────────────────────────
