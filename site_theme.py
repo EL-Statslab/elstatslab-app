@@ -136,21 +136,6 @@ hr {{ border-color: var(--el-rule) !important; }}
   background: var(--el-card); border: 1px solid var(--el-rule); border-radius: 16px;
 }}
 .stApp [data-testid="stExpander"] summary p {{ font-size: 1.3rem; font-weight: 600; color: var(--el-navy); }}
-.stApp .stMarkdown div[style*="border: 1px solid rgb(224, 224, 224)"] {{
-  background: #fff !important; border: 1px solid var(--el-rule) !important; border-radius: 16px !important;
-}}
-.stApp .stMarkdown div[style*="letter-spacing: 0.14em"] {{ color: var(--el-grey) !important; font-size: 1rem !important; }}
-.stApp .stMarkdown div[style*="font-size: 1.35rem"][style*="font-weight: 700"] {{
-  font-size: 2rem !important; color: var(--el-navy) !important; line-height: 1.1;
-}}
-.stApp .stMarkdown span[style*="font-size: 0.6rem"] {{ font-size: 0.95rem !important; letter-spacing: .06em !important; }}
-.stApp .stMarkdown span[style*="rgb(249, 168, 37)"] {{
-  background: rgba(228, 87, 46, .10) !important; border-color: var(--el-orange) !important;
-  color: var(--el-orange) !important;
-}}
-.stApp .stMarkdown div[style*="font-size: 0.65rem"][style*="rgb(170, 170, 170)"] {{
-  font-size: 1.05rem !important; color: var(--el-grey) !important;
-}}
 </style>
 """
 
