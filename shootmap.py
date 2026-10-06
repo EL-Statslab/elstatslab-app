@@ -1,5 +1,5 @@
 """
-ELSTATSLAB shot maps.
+ELSTATSLAB shot maps (look papier : beige, marine, orange, Barlow Condensed, format 4:5).
 
 Module pur (matplotlib + pandas), sans Streamlit : utilise par shotmap_ui.py
 dans l'app et par le CLI en bas de fichier pour les exports X.
@@ -13,15 +13,23 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from matplotlib import font_manager
-from matplotlib.patches import Circle, Rectangle, Arc, Polygon
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Rectangle, Arc, Polygon, FancyBboxPatch
 from matplotlib.colors import LinearSegmentedColormap, Normalize, to_rgb
 from PIL import Image
 
 # ------------------------------------------------------------------ STYLE
-BG = "#ffffff"
-COURT_BG = "#f5f0e8"
-LINE = "#2c2c2c"
-TXT = "#333333"
+# Palette ELSTATSLAB (meme que les autres exports) : papier, marine, orange.
+PAPER = "#F3EEE4"
+CARD = "#FBF8F1"
+RULE = "#E1D8C6"
+NAVY = "#14213D"
+ORANGE = "#E4572E"
+GREY = "#6B7280"
+BG = PAPER
+COURT_BG = CARD
+LINE = NAVY
+TXT = NAVY
 PE = [pe.withStroke(linewidth=4, foreground="white")]
 
 CORNER_X = 660            # FIBA : 0.90 m de la touche (a verifier sur tes donnees)
@@ -456,21 +464,36 @@ def _scale_bar(fig, k, mode, ref_stats, y0=0.100):
              fontproperties=F_SEMI, color=TXT)
 
 
-HEX_COLOR = "#333333"    # couleur des hexagones : gris neutre (alternatives testees : orange "#e8491c", violet, ambre)
+HEX_COLOR = NAVY         # couleur des hexagones : marine ELSTATSLAB
 HEX_ALPHA = 0.5
 LOGO_MAX_PX = 400      # un logo est affiche a ~220 px de large : inutile de garder plus
 LOGO_MAX_PIXELS = 25_000_000   # au dela (5000 x 5000), le logo est ignore plutot que de risquer l'app
 
 
-@lru_cache(maxsize=32)
-def _load_logo(path):
-    """Logo compose sur fond blanc (RGB uint8), reduit et recadre, ou None.
+def _strip_sponsor(img, alpha):
+    """Coupe un bloc sponsor separe du blason par une vraie bande vide (meme regle que app.py)."""
+    h = img.shape[0]
+    row_has = (alpha > 0).sum(axis=1)
+    threshold = alpha.shape[1] * 0.005
+    gap_start = None
+    for i, v in enumerate(row_has):
+        if v < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None and (i - gap_start) > h * 0.015 and gap_start > h * 0.25:
+                img, alpha = img[:gap_start], alpha[:gap_start]
+                ys, xs = np.where(alpha > 0)
+                if len(xs):
+                    sl = (slice(ys.min(), ys.max() + 1), slice(xs.min(), xs.max() + 1))
+                    img, alpha = img[sl], alpha[sl]
+                return img, alpha
+            gap_start = None
+    return img, alpha
 
-    Meme principe que les exports de app.py : on aplatit la transparence avant de redimensionner,
-    sinon les pixels semi transparents (RGB noir dessous) forment un halo sombre. Le logo est
-    reduit des la lecture (LOGO_MAX_PX) et mis en cache : un PNG haute resolution ne coute plus
-    des centaines de Mo de memoire a chaque rendu.
-    """
+
+def _read_rgba(path, strip_sponsor):
+    """RGBA flottant recadre (marges transparentes retirees, sponsor retire pour les ecussons)."""
     try:
         with Image.open(path) as probe:          # lit seulement l'en-tete : pas de decodage
             w, h = probe.size
@@ -482,33 +505,108 @@ def _load_logo(path):
         img = np.asarray(im, dtype=np.float32) / 255.0
     except Exception:
         return None
-    alpha = img[:, :, 3]
-    alpha = np.where(alpha < 0.12, 0.0, alpha)          # supprime le liseré quasi invisible
+    alpha = np.where(img[:, :, 3] < 0.12, 0.0, img[:, :, 3])   # supprime le liseré quasi invisible
     ys, xs = np.where(alpha > 0)
     if len(xs):
         sl = (slice(ys.min(), ys.max() + 1), slice(xs.min(), xs.max() + 1))
         img, alpha = img[sl], alpha[sl]
-    a = alpha[:, :, None]
+        if strip_sponsor:
+            img, alpha = _strip_sponsor(img, alpha)
+    out = img.copy()
+    out[:, :, 3] = alpha
+    return out
+
+
+@lru_cache(maxsize=32)
+def _load_logo(path):
+    """Ecusson d'equipe compose sur fond blanc (RGB uint8), recadre, sans bloc sponsor, ou None.
+
+    On aplatit la transparence avant tout redimensionnement ulterieur, sinon les pixels
+    semi transparents (RGB noir dessous) forment un halo sombre. Mis en cache."""
+    img = _read_rgba(path, strip_sponsor=True)
+    if img is None:
+        return None
+    a = img[:, :, 3:4]
     rgb = img[:, :, :3] * a + (1.0 - a)
     return (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
 
 
-def _place_logo(fig, path, rect):
+@lru_cache(maxsize=4)
+def _load_brand(path):
+    """Logo ELSTATSLAB avec un vrai canal alpha (le blanc d'un fichier opaque est retire)."""
+    img = _read_rgba(path, strip_sponsor=False)
+    if img is None:
+        return None
+    if img[:, :, 3].min() > 0.98:
+        whiteness = img[:, :, :3].min(axis=2)
+        img[:, :, 3] = np.clip((1.0 - whiteness - 0.03) / 0.24, 0.0, 1.0)
+        ys, xs = np.where(img[:, :, 3] > 0.04)
+        if len(xs):
+            img = img[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return img
+
+
+def _u(fig, x, y):
+    """Unites de conception (1000 x 1250) vers fractions de figure."""
+    return x / 1000.0, 1.0 - y / 1250.0
+
+
+def _ftext(fig, x, y, s, size, fp, color, k, ha="left", va="center_baseline", **kw):
+    """Texte en unites de conception ; size en unites (1 unite = 0.864 pt pour une figure de 12 po)."""
+    fx, fy = _u(fig, x, y)
+    return fig.text(fx, fy, s, ha=ha, va=va, fontsize=size * 0.864 * k, fontproperties=fp,
+                    color=color, **kw)
+
+
+def _unit_axes(fig, x0, y0, x1, y1):
+    fx0, fy1 = _u(fig, x0, y0)
+    fx1, fy0 = _u(fig, x1, y1)
+    lax = fig.add_axes([fx0, fy0, fx1 - fx0, fy1 - fy0])
+    lax.axis("off")
+    return lax
+
+
+def _place_brand(fig, path, box):
+    """Logo ELSTATSLAB (transparent) ajuste dans box = (x0, y0, x1, y1) en unites de conception."""
     if not path or not Path(path).exists():
         return
-    img = _load_logo(path)
+    img = _load_brand(str(path))
     if img is None:
         return
-    lax = fig.add_axes(rect)
+    x0, y0, x1, y1 = box
+    ih, iw = img.shape[:2]
+    s = min((x1 - x0) / iw, (y1 - y0) / ih)
+    w, h = iw * s, ih * s
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    lax = _unit_axes(fig, cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
     lax.imshow(img, interpolation="lanczos")
-    lax.axis("off")
+
+
+def _place_badge(fig, path, box):
+    """Ecusson de l'equipe dans un badge blanc arrondi, box = (x0, y0, x1, y1) carre."""
+    if not path or not Path(path).exists():
+        return
+    img = _load_logo(str(path))
+    if img is None:
+        return
+    lax = _unit_axes(fig, *box)
+    lax.set_xlim(0, 1)
+    lax.set_ylim(1, 0)
+    lax.add_patch(FancyBboxPatch((0.02, 0.02), 0.96, 0.96, boxstyle="round,pad=0,rounding_size=0.2",
+                                 facecolor="white", edgecolor=RULE, linewidth=1.4 * (fig.get_figwidth() / 12)))
+    ih, iw = img.shape[:2]
+    s = min(0.70 / iw, 0.70 / ih)
+    w, h = iw * s, ih * s
+    lax.imshow(img, extent=[0.5 - w / 2, 0.5 + w / 2, 0.5 + h / 2, 0.5 - h / 2], interpolation="lanczos", zorder=5)
+    lax.set_xlim(0, 1)
+    lax.set_ylim(1, 0)
 
 
 # ------------------------------------------------------------------ RENDER
 def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_points=True,
                     logo_path=None, team_logo_path=None, team_name=None,
-                    figsize=(12, 12), watermark=None, note=None, overlay="none", show_freq=False):
-    """Retourne une Figure carree. 'heat' bascule en 'zones' sous MIN_GAMES_KDE matchs."""
+                    figsize=(12, 15), watermark=None, note=None, overlay="none", show_freq=False):
+    """Retourne une Figure 4:5 (12 x 15 po). 'heat' bascule en 'zones' sous MIN_GAMES_KDE matchs."""
     k = figsize[0] / 12.0
     n_games = df["GameCode"].nunique() if len(df) else 0
     if mode == "heat" and (n_games < MIN_GAMES_KDE or (len(df) and int(df["in_view"].sum()) <= 5)
@@ -517,8 +615,14 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
 
     fig = plt.figure(figsize=figsize)
     fig.patch.set_facecolor(BG)
-    ymin, rect, sb_y, labels, arrows = _layout()
-    ax = fig.add_axes(rect)
+    ymin, _rect, _sb, labels, arrows = _layout()
+
+    # terrain : 900 unites de large, sous la rangee de chips et la legende
+    court_top = 366.0
+    court_h = 900.0 * (VIEW_Y_MAX - ymin) / 1530.0
+    fx0, fy_top = _u(fig, 50, court_top)
+    _fx1, fy_bot = _u(fig, 950, court_top + court_h)
+    ax = fig.add_axes([fx0, fy_bot, 0.9, fy_top - fy_bot])
     ax.set_facecolor(BG)
     draw_court(ax, ymin=ymin)
     zs = zone_stats(df)
@@ -531,6 +635,7 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
             _hex_layer(ax, df)
         _zone_text(ax, zs, k, labels, arrows,
                    empty_text="Not recorded" if note else "No shots", show_freq=show_freq)
+    legend_y = _u(fig, 0, 338)[1]
     if show_points and len(df):
         _points_layer(ax, df, alpha=0.75 if mode == "zones" else 0.8, k=k)
         h, l = ax.get_legend_handles_labels()
@@ -539,48 +644,60 @@ def render_shootmap(df, team, subtitle, mode="zones", ref_stats=None, show_point
             lp = F_SEMI.copy()
             lp.set_size(22 * k)
             fig.legend([h[i] for i in order], [l[i] for i in order], loc="center",
-                       bbox_to_anchor=(0.5, 0.803), ncol=2, frameon=False, prop=lp,
+                       bbox_to_anchor=(0.5, legend_y), ncol=2, frameon=False, prop=lp,
                        labelcolor=TXT, handletextpad=0.4, columnspacing=2.5, markerscale=1.4)
 
     if overlay == "hex" and mode == "zones" and len(df):
-        _hex_legend(fig, k)
+        _hex_legend(fig, k, y=legend_y)
 
     s = summary_stats(df)
     pct2 = (s["2pm"] / s["2pa"] * 100) if s["2pa"] else 0
     pct3 = (s["3pm"] / s["3pa"] * 100) if s["3pa"] else 0
     name = team_name or TEAM_DISPLAY_NAMES.get(team, team)
 
-    fig.text(0.5, 0.940, name, ha="center", va="center", fontsize=38 * k,
-             fontproperties=F_BOLD, color=TXT)
-    fig.text(0.5, 0.893, subtitle, ha="center", va="center", fontsize=21 * k,
-             fontproperties=F_REG, color="#666666")
-    fig.text(0.5, 0.848,
-             f"{s['fga']} FGA   |   2P {pct2:.1f}% ({s['2pm']}/{s['2pa']})   |   "
-             f"3P {pct3:.1f}% ({s['3pm']}/{s['3pa']})   |   eFG% {s['efg']:.1f}%",
-             ha="center", va="center", fontsize=23 * k, fontproperties=F_BOLD, color=TXT)
+    # ── barre de titre : logo, repere orange, nom de l'equipe, ecusson ─────────────────────────
+    _place_brand(fig, logo_path, (50, 36, 146, 132))
+    _ftext(fig, 170, 52, "SHOT MAP", 22, F_BOLD, ORANGE, k)
+    _ftext(fig, 170, 106, name, min(54, 1500 / max(len(name), 1)), F_BOLD, NAVY, k)
+    _ftext(fig, 170, 152, subtitle, 21, F_REG, GREY, k)
+    _place_badge(fig, team_logo_path, (846, 32, 950, 136))
 
-    _scale_bar(fig, k, mode, ref_stats, sb_y)
-    _place_logo(fig, logo_path, [0.035, 0.895, 0.12, 0.085])
-    _place_logo(fig, team_logo_path, [0.845, 0.895, 0.12, 0.085])
+    # ── chips de statistiques ─────────────────────────────────────────────────────────────────
+    chips = [("FGA", f"{s['fga']}", ""),
+             ("2P", f"{pct2:.1f}%", f"{s['2pm']}/{s['2pa']}"),
+             ("3P", f"{pct3:.1f}%", f"{s['3pm']}/{s['3pa']}"),
+             ("eFG%", f"{s['efg']:.1f}%", "")]
+    cw, gap, cy0, ch = 214.5, 14, 184, 106
+    sx = _unit_axes(fig, 0, 0, 1000, 1250)      # calque pleine figure pour les cartes
+    sx.set_xlim(0, 1000)
+    sx.set_ylim(1250, 0)
+    for i, (lab, val, sub) in enumerate(chips):
+        x0 = 50 + i * (cw + gap)
+        sx.add_patch(FancyBboxPatch((x0, cy0), cw, ch, boxstyle="round,pad=0,rounding_size=14",
+                                    facecolor=CARD, edgecolor=RULE, linewidth=1.2 * k))
+        cx = x0 + cw / 2
+        _ftext(fig, cx, cy0 + 22, lab, 18, F_SEMI, GREY, k, ha="center")
+        _ftext(fig, cx, cy0 + 56, val, 38, F_BOLD, NAVY, k, ha="center")
+        if sub:
+            _ftext(fig, cx, cy0 + 90, sub, 19, F_SEMI, GREY, k, ha="center")
+
+    _scale_bar(fig, k, mode, ref_stats, _u(fig, 0, 1034)[1])
 
     n_unloc = int((~df["located"]).sum()) if len(df) else 0
     if n_unloc and not note:
         word = "shot has" if n_unloc == 1 else "shots have"
-        fig.text(0.5, 0.080, f"{n_unloc} {word} no recorded location: counted in the totals, not in the zones.",
-                 ha="center", va="center", fontsize=14 * k, fontproperties=F_SEMI, color="#777777")
+        _ftext(fig, 500, 1086, f"{n_unloc} {word} no recorded location: counted in the totals, not in the zones.",
+               17, F_SEMI, GREY, k, ha="center")
     if note:
-        fig.text(0.5, 0.080, note, ha="center", va="center", fontsize=14 * k,
-                 fontproperties=F_SEMI, color="#b03a2e")
+        _ftext(fig, 500, 1086, note, 17, F_SEMI, "#b03a2e", k, ha="center")
 
-    # footer identique aux autres exports ELSTATSLAB
-    fig.text(0.47, 0.052, "DataViz By EL_STATSLAB", ha="right", va="center",
-             fontsize=20 * k, fontproperties=F_BOLD, color="#1a1a1a")
-    fig.text(0.5, 0.052, "|", ha="center", va="center", fontsize=20 * k,
-             fontproperties=F_REG, color="#bbbbbb")
-    fig.text(0.53, 0.052, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
-             fontsize=14 * k, fontproperties=F_SEMI, color="#e8491c")
-    fig.text(0.5, 0.022, "X @EL_Statslab   |   elstatslab.com", ha="center", va="center",
-             fontsize=14 * k, fontproperties=F_REG, color="#888888")
+    # ── pied de page identique aux autres exports ELSTATSLAB ──────────────────────────────────
+    fig.add_artist(Line2D([_u(fig, 50, 0)[0], _u(fig, 950, 0)[0]], [_u(fig, 0, 1172)[1]] * 2,
+                          color=NAVY, linewidth=1.6 * k, transform=fig.transFigure))
+    _ftext(fig, 50, 1198, "DataViz By EL_STATSLAB", 25, F_BOLD, NAVY, k)
+    _ftext(fig, 50, 1224, "Insights, Trends, Metrics, Dataviz", 19, F_SEMI, ORANGE, k)
+    _ftext(fig, 950, 1198, "X @EL_Statslab", 25, F_BOLD, NAVY, k, ha="right")
+    _ftext(fig, 950, 1224, "elstatslab.com", 19, F_REG, GREY, k, ha="right")
 
     if watermark:
         fig.text(0.5, 0.50, watermark, ha="center", va="center", fontsize=60 * k, color="#000",
