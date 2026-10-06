@@ -105,7 +105,7 @@ def default_pct_colour(pct: float) -> tuple:
 # =============================================================================
 # LOGO HELPERS
 # =============================================================================
-def _autocrop_rgba(img: np.ndarray) -> np.ndarray:
+def _autocrop_rgba(img: np.ndarray, strip_sponsor: bool = True) -> np.ndarray:
     """Trims transparent margins, and drops a sponsor block separated from the
     crest by a real empty band (same rule as _autocrop_logo in app.py)."""
     alpha = img[:, :, 3]
@@ -113,6 +113,8 @@ def _autocrop_rgba(img: np.ndarray) -> np.ndarray:
     if len(xs) == 0:
         return img
     cropped = img[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    if not strip_sponsor:
+        return cropped
 
     h = cropped.shape[0]
     row_has = (cropped[:, :, 3] > 0.04).sum(axis=1)
@@ -146,7 +148,7 @@ def _load_brand_logo(path: Path) -> np.ndarray:
     if img[:, :, 3].min() > 0.98:                       # fully opaque file
         whiteness = img[:, :, :3].min(axis=2)
         img[:, :, 3] = np.clip((1.0 - whiteness - 0.03) / 0.24, 0.0, 1.0)
-    return _autocrop_rgba(img)
+    return _autocrop_rgba(img, strip_sponsor=False)
 
 
 def _load_team_logo_on_white(path: Path) -> np.ndarray:
