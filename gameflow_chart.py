@@ -26,6 +26,7 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import font_manager
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import FancyBboxPatch, Rectangle
 from PIL import Image
 
@@ -214,8 +215,8 @@ def _fit_text(ax, x, y, s, size, fp, color, max_w, ha="left", min_size=12, **kw)
     """Draws text, then shrinks it (measured on the real render) to fit max_w design units."""
     t = _text(ax, x, y, s, size, fp, color, ha=ha, **kw)
     fig = ax.figure
-    fig.canvas.draw()
-    w_units = t.get_window_extent(fig.canvas.get_renderer()).width / (FIG_W_IN * DPI) * W
+    renderer = fig._get_renderer() if hasattr(fig, "_get_renderer") else FigureCanvasAgg(fig).get_renderer()
+    w_units = t.get_window_extent(renderer).width / (FIG_W_IN * DPI) * W
     if w_units > max_w and w_units > 0:
         t.remove()
         t = _text(ax, x, y, s, max(min_size, size * max_w / w_units), fp, color, ha=ha, **kw)
@@ -296,6 +297,7 @@ def _render(data: dict, round_label: str = "") -> bytes:
     fh, fa = data["final_home"], data["final_away"]
 
     fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, facecolor=PAPER)
+    FigureCanvasAgg(fig)  # force the Agg canvas, whatever backend the host picked
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
     ax.set_ylim(H, 0)
