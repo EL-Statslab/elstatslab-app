@@ -1,17 +1,39 @@
 """
-ELSTATSLAB – gameflow_chart.py (v9)
+ELSTATSLAB Game Flow PNG export (4:5, 12 x 15 in at 150 dpi = 1800 x 2250 px).
+
+New ELSTATSLAB look: warm paper background, deep navy, orange accent, Barlow
+Condensed. Home is navy, away is orange (same pairing as the Matchup win
+probability bar), so the two teams read the same way on every visual.
+
+Drop in replacement for gameflow_chart.py, same public function:
+
+    from gameflow_chart import render_gameflow_png
+    png = render_gameflow_png(gamecode, season, round_label="Regular Season Round 3")
+
+The aspect argument is kept for compatibility. Both values now return the 4:5
+export, the format X shows uncropped.
+
+Self contained on purpose. Run from the ELSTATSLAB_APP folder so that Logos/
+and fonts/ resolve.
 """
 
-import sqlite3, json, io
+import io
+import json
+import sqlite3
 from pathlib import Path
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
-from matplotlib import font_manager
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-import numpy as np
+from typing import Optional
 
-APP_ROOT  = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP")
-_PUBLIC_DB_LOCAL = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP\euroleague_public.db")
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import font_manager
+from matplotlib.patches import FancyBboxPatch, Rectangle
+from PIL import Image
+
+# =============================================================================
+# CONFIG
+# =============================================================================
+APP_ROOT = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP")
+_PUBLIC_DB_LOCAL = APP_ROOT / "euroleague_public.db"
 _PUBLIC_DB_CLOUD = Path("euroleague_public.db")
 
 if _PUBLIC_DB_LOCAL.exists():
@@ -21,91 +43,10 @@ elif _PUBLIC_DB_CLOUD.exists():
 else:
     PUBLIC_DB = APP_ROOT / "euroleague_public.db"
 
+FONTS_DIR = Path("fonts")
 LOGOS_DIR = Path("Logos")
 ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
-
-# Police de marque (Barlow Condensed). Même dossier fonts/ que app.py ;
-# retombe automatiquement sur la police par défaut si les fichiers sont absents.
-FONTS_DIR = Path("fonts")
-
-
-def _brand_font(filename: str, fallback_weight: str = "bold") -> font_manager.FontProperties:
-    fp = FONTS_DIR / filename
-    if fp.exists():
-        return font_manager.FontProperties(fname=str(fp))
-    return font_manager.FontProperties(weight=fallback_weight)
-
-
-BARLOW_BOLD     = _brand_font("BarlowCondensed-Bold.ttf", "bold")
-BARLOW_SEMIBOLD = _brand_font("BarlowCondensed-SemiBold.ttf", "semibold")
-BARLOW_REGULAR  = _brand_font("BarlowCondensed-Regular.ttf", "regular")
-
-
-def _autocrop_logo(img_arr):
-    """
-    Recadre une image RGBA sur son contenu réel :
-    1) coupe la marge transparente autour du dessin
-    2) si un bloc secondaire (logo sponsor, texte) est séparé du dessin
-       principal par un vrai espace vide, ne garde que le premier bloc
-       (le blason/l'écusson), pas le sponsor en dessous.
-    Corrige les logos avec beaucoup de marge (ex: CZV) ou un sponsor
-    intégré au fichier (ex: FEN) sans réglage manuel par équipe.
-    """
-    alpha = img_arr[:, :, 3]
-    ys, xs = np.where(alpha > 0.04)
-    if len(xs) == 0:
-        return img_arr
-    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
-    cropped = img_arr[y0:y1 + 1, x0:x1 + 1]
-
-    h = cropped.shape[0]
-    a2 = cropped[:, :, 3]
-    row_has_content = (a2 > 0.04).sum(axis=1)
-    threshold = a2.shape[1] * 0.005
-    gap_start = None
-    for i, s in enumerate(row_has_content):
-        if s < threshold:
-            if gap_start is None:
-                gap_start = i
-        else:
-            if gap_start is not None:
-                gap_h = i - gap_start
-                # Un vrai espace de séparation : assez haut, et pas collé au
-                # tout début (sinon on risque de couper le blason lui même).
-                if gap_h > h * 0.015 and gap_start > h * 0.25:
-                    cropped = cropped[:gap_start, :, :]
-                    a3 = cropped[:, :, 3]
-                    ys2, xs2 = np.where(a3 > 0.04)
-                    if len(xs2):
-                        xx0, xx1, yy0, yy1 = xs2.min(), xs2.max(), ys2.min(), ys2.max()
-                        cropped = cropped[yy0:yy1 + 1, xx0:xx1 + 1]
-                    return cropped
-            gap_start = None
-    return cropped
-
-
-def _fit_text(ax, x, y, text, fontsize, max_width_in, fontproperties, color,
-              ha="center", va="center", min_fontsize=8.5):
-    """
-    Dessine un texte et, s'il dépasse la largeur disponible (mesurée sur le
-    vrai rendu, pas estimée), réduit automatiquement sa taille pour qu'il
-    tienne. Remplace les tailles fixes qui cassent selon la longueur réelle
-    des noms d'un match à l'autre.
-    """
-    fig = ax.figure
-    t = ax.text(x, y, text, ha=ha, va=va, fontsize=fontsize,
-                fontproperties=fontproperties, color=color)
-    canvas = FigureCanvasAgg(fig)
-    canvas.draw()
-    renderer = canvas.get_renderer()
-    width_in = t.get_window_extent(renderer=renderer).width / fig.dpi
-    if width_in > max_width_in and width_in > 0:
-        new_fs = max(min_fontsize, fontsize * (max_width_in / width_in))
-        t.remove()
-        t = ax.text(x, y, text, ha=ha, va=va, fontsize=new_fs,
-                    fontproperties=fontproperties, color=color)
-    return t
 
 LOGO_MAP = {
     "ASV": "ASV.png", "BAR": "BAR.png", "BAS": "BKN.png", "BES": "BJK.png", "DUB": "DUB.png",
@@ -113,11 +54,6 @@ LOGO_MAP = {
     "MIL": "AXM.png", "MUN": "BAY.png", "OLY": "OLY.png", "PAM": "VAL.png",
     "PAN": "PAO.png", "PAR": "PAR.png", "PRS": "PBB.png", "RED": "CZV.png",
     "TEL": "MTA.png", "ULK": "FEN.png", "VIR": "VIR.png", "ZAL": "ZAL.png",
-}
-ZOOM_CORRECTIONS = {
-    "ASM": 1.3, "AXM": 1.5, "CZV": 1.6, "EFS": 0.8,
-    "FEN": 1.7, "BAR": 0.8, "PAO": 1.1, "VIR": 0.85,
-    "PBB": 0.85, "OLY": 0.9, "HTA": 0.8,
 }
 TEAM_DISPLAY_NAMES = {
     "ASV": "LDLC ASVEL Villeurbanne", "BAR": "FC Barcelona",
@@ -132,30 +68,58 @@ TEAM_DISPLAY_NAMES = {
     "VIR": "Virtus Bologna", "ZAL": "Zalgiris Kaunas",
 }
 
-COLOR_HOME="#1f77b4"; COLOR_AWAY="#d62728"; COLOR_AXIS="#2a2a2a"
-COLOR_GRID="#e5e5e5"; COLOR_TEXT="#1a1a1a"; COLOR_SUBTLE="#8a8a8a"
-COLOR_BG="#ffffff"; COLOR_QT="#b0b0b0"; COLOR_OT="#d0d0d0"
+# ELSTATSLAB look
+PAPER = "#F3EEE4"
+CARD = "#FBF8F1"
+RULE = "#E1D8C6"
+NAVY = "#14213D"
+ORANGE = "#E4572E"
+GREY = "#6B7280"
+COLOR_HOME = NAVY
+COLOR_AWAY = ORANGE
 
-LOGO_SCALE = 1.0
-
-def dname(c, fb): return TEAM_DISPLAY_NAMES.get(c, fb)
-def _logo_zoom(c):
-    stem = Path(LOGO_MAP.get(c, "")).stem
-    return ZOOM_CORRECTIONS.get(stem, 1.0)
-def _logo_path(c):
-    fn = LOGO_MAP.get(c)
-    if not fn: return None
-    p = LOGOS_DIR / fn
-    return p if p.exists() else None
+# Canvas: design units, 1000 wide by 1250 high (4:5)
+W, H = 1000, 1250
+FIG_W_IN, FIG_H_IN, DPI = 12, 15, 150
+PT = FIG_W_IN * 72 / W          # points per design unit
 
 
+def _resolve(p) -> Path:
+    p = Path(p)
+    if p.exists():
+        return p
+    alt = Path(__file__).resolve().parent / p
+    return alt if alt.exists() else p
+
+
+def _brand_font(filename: str, fallback_weight: str = "bold") -> font_manager.FontProperties:
+    fp = _resolve(FONTS_DIR / filename)
+    if fp.exists():
+        return font_manager.FontProperties(fname=str(fp))
+    return font_manager.FontProperties(weight=fallback_weight)
+
+
+BARLOW_BOLD = _brand_font("BarlowCondensed-Bold.ttf", "bold")
+BARLOW_SEMIBOLD = _brand_font("BarlowCondensed-SemiBold.ttf", "semibold")
+BARLOW_REGULAR = _brand_font("BarlowCondensed-Regular.ttf", "regular")
+
+
+def dname(code, fallback):
+    return TEAM_DISPLAY_NAMES.get(code, fallback)
+
+
+# =============================================================================
+# DATA
+# =============================================================================
 def load_gameflow(gc, s):
     conn = sqlite3.connect(str(PUBLIC_DB))
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     cur.execute("SELECT * FROM gameflow_data WHERE season=? AND gamecode=?", (s, gc))
-    row = cur.fetchone(); conn.close()
-    if not row: return None
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
     d = dict(row)
     d["diff_series"] = json.loads(d["diff_series"])
     d["runs"] = json.loads(d["runs"])
@@ -165,239 +129,299 @@ def load_gameflow(gc, s):
 
 
 def _qt_bounds(ps):
-    if not ps: return []
-    b=[]; prev=ps[0]
-    for i,p in enumerate(ps):
-        if p!=prev: b.append((i,p)); prev=p
+    if not ps:
+        return []
+    b = []
+    prev = ps[0]
+    for i, p in enumerate(ps):
+        if p != prev:
+            b.append((i, p))
+            prev = p
     return b
 
 
-def _draw_team(ax, code, name, x_center):
-    """Logo recadré automatiquement sur son contenu réel (voir _autocrop_logo),
-    donc plus besoin de facteur de zoom manuel par équipe : chaque logo est
-    normalisé à la même taille de base, peu importe la marge du fichier source."""
-    base_w, base_h = 0.19, 0.68
-    logo_y = 0.60
-    lp = _logo_path(code)
-    if lp:
-        img = plt.imread(str(lp))
-        w, h = base_w, base_h
-        if img.ndim == 3 and img.shape[2] == 4:
-            img = _autocrop_logo(img)
-            # Nettoyage alpha : compositer sur fond blanc pour éliminer le bruit
-            alpha = img[:, :, 3:4]
-            rgb = img[:, :, :3]
-            white = np.ones_like(rgb)
-            img = rgb * alpha + white * (1 - alpha)  # fond blanc
-        la = ax.inset_axes([x_center - w/2, logo_y - h/2 + 0.15, w, h])
-        la.imshow(img, interpolation="lanczos")
-        la.axis("off")
-    ax.text(x_center, 0.14, name, ha="center", va="top",
-            fontsize=13, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
+# =============================================================================
+# LOGO HELPERS
+# =============================================================================
+def _autocrop_rgba(img: np.ndarray, strip_sponsor: bool = True) -> np.ndarray:
+    """Trims transparent margins, and drops a sponsor block separated from the
+    crest by a real empty band (same rule as _autocrop_logo in app.py)."""
+    alpha = img[:, :, 3]
+    ys, xs = np.where(alpha > 0.04)
+    if len(xs) == 0:
+        return img
+    cropped = img[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    if not strip_sponsor:
+        return cropped
+
+    h = cropped.shape[0]
+    row_has = (cropped[:, :, 3] > 0.04).sum(axis=1)
+    threshold = cropped.shape[1] * 0.005
+    gap_start = None
+    for i, s in enumerate(row_has):
+        if s < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None and (i - gap_start) > h * 0.015 and gap_start > h * 0.25:
+                cropped = cropped[:gap_start]
+                ys2, xs2 = np.where(cropped[:, :, 3] > 0.04)
+                if len(xs2):
+                    cropped = cropped[ys2.min():ys2.max() + 1, xs2.min():xs2.max() + 1]
+                return cropped
+            gap_start = None
+    return cropped
 
 
+def _read_rgba(path: Path) -> np.ndarray:
+    im = Image.open(path).convert("RGBA")
+    im.thumbnail((900, 900), Image.LANCZOS)
+    return np.asarray(im, dtype=np.float32) / 255.0
+
+
+def _load_brand_logo(path: Path) -> np.ndarray:
+    img = _read_rgba(path)
+    if img[:, :, 3].min() > 0.98:                       # fully opaque file: drop the white
+        whiteness = img[:, :, :3].min(axis=2)
+        img[:, :, 3] = np.clip((1.0 - whiteness - 0.03) / 0.24, 0.0, 1.0)
+    return _autocrop_rgba(img, strip_sponsor=False)
+
+
+def _load_team_logo_on_white(path: Path) -> np.ndarray:
+    img = _autocrop_rgba(_read_rgba(path))
+    a = img[:, :, 3:4]
+    return img[:, :, :3] * a + (1.0 - a)
+
+
+def _team_logo_path(code: str) -> Optional[Path]:
+    filename = LOGO_MAP.get(code)
+    if not filename:
+        return None
+    p = _resolve(LOGOS_DIR / filename)
+    return p if p.exists() else None
+
+
+# =============================================================================
+# DRAWING HELPERS
+# =============================================================================
+def _text(ax, x, y, s, size, fp, color, ha="left", va="center_baseline", z=6, **kw):
+    f = fp.copy()
+    f.set_size(size * PT)
+    return ax.text(x, y, s, fontproperties=f, color=color, ha=ha, va=va, zorder=z, **kw)
+
+
+def _fit_text(ax, x, y, s, size, fp, color, max_w, ha="left", min_size=12, **kw):
+    """Draws text, then shrinks it (measured on the real render) to fit max_w design units."""
+    t = _text(ax, x, y, s, size, fp, color, ha=ha, **kw)
+    fig = ax.figure
+    fig.canvas.draw()
+    w_units = t.get_window_extent(fig.canvas.get_renderer()).width / (FIG_W_IN * DPI) * W
+    if w_units > max_w and w_units > 0:
+        t.remove()
+        t = _text(ax, x, y, s, max(min_size, size * max_w / w_units), fp, color, ha=ha, **kw)
+    return t
+
+
+def _rbox(ax, x, y, w, h, fc, ec="none", r=14, lw=1.2, z=1):
+    ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle=f"round,pad=0,rounding_size={r}",
+                                facecolor=fc, edgecolor=ec, linewidth=lw, zorder=z))
+
+
+def _image(ax, img, x0, y0, x1, y1, z=4):
+    ax.imshow(img, extent=[x0, x1, y1, y0], zorder=z, interpolation="lanczos")
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.set_aspect("auto")
+
+
+def _fit(img: np.ndarray, box_w: float, box_h: float, cx: float, cy: float):
+    h, w = img.shape[:2]
+    s = min(box_w / w, box_h / h)
+    dw, dh = w * s, h * s
+    return cx - dw / 2, cy - dh / 2, cx + dw / 2, cy + dh / 2
+
+
+def _draw_team(ax, cx, code, name):
+    box_y = 160
+    _rbox(ax, cx - 58, box_y, 116, 116, "white", ec=RULE, r=22, z=2)
+    lp = _team_logo_path(code)
+    if lp is not None:
+        crest = _load_team_logo_on_white(lp)
+        _image(ax, crest, *_fit(crest, 86, 86, cx, box_y + 58), z=3)
+    _fit_text(ax, cx, 306, name, min(30, 700 / max(len(name), 1)), BARLOW_BOLD, NAVY,
+              max_w=330, ha="center")
+
+
+def _nice_step(span: float) -> int:
+    for step in (2, 5, 10, 20, 25, 50):
+        if span / step <= 7:
+            return step
+    return 50
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
 def render_gameflow_png(gamecode, season, round_label="", output_path=None, aspect="square"):
     """
-    Génère le PNG du gameflow.
-    aspect: "square" (12×12 pour site) ou "16:9" (12×6.75 pour export X)
-    round_label: ex. "Regular Season Round 3", affiché dans le bandeau de titre
+    Builds the Game Flow PNG. round_label e.g. "Regular Season Round 3".
+    aspect is kept for compatibility (both values return the 4:5 export).
     """
     data = load_gameflow(gamecode, season)
     if not data:
-        raise ValueError(f"Aucun gameflow pour GC {gamecode} saison {season}")
+        raise ValueError(f"No gameflow for GC {gamecode} season {season}")
+    png = _render(data, round_label)
+    if output_path:
+        Path(output_path).write_bytes(png)
+        print(f"PNG written: {output_path}")
+    return png
 
-    ds = data["diff_series"]; ps = data["periods_series"]
-    runs = data["runs"]; lineups = data["lineups"]
-    hc = data["home_code"]; ac = data["away_code"]
-    hn = dname(hc, data["home_team"]); an = dname(ac, data["away_team"])
-    fh = data["final_home"]; fa = data["final_away"]
 
-    if aspect == "16:9":
-        fig = plt.figure(figsize=(12, 6.75), dpi=120, facecolor=COLOR_BG)
-        gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.55, 0.70, 2.9, 0.85, 1.0, 0.3],
-                              hspace=0.25,
-                              left=0.08, right=0.95, top=0.95, bottom=0.03)
-        title_fs = 15
-        score_fs = 24; name_fs = 11; run_fs = 11.5; best5_title_fs = 13
-        best5_team_fs = 12; best5_stat_fs = 10.5; best5_players_fs = 11.5
-        footer_fs = 9
-    else:
-        fig = plt.figure(figsize=(12, 12), dpi=120, facecolor=COLOR_BG)
-        gs = fig.add_gridspec(6, 1,
-                              height_ratios=[0.6, 1.05, 3.3, 1.0, 1.2, 0.6],
-                              hspace=0.30,
-                              left=0.08, right=0.95, top=0.95, bottom=0.03)
-        title_fs = 17
-        score_fs = 30; name_fs = 13; run_fs = 13.5; best5_title_fs = 15
-        best5_team_fs = 13.5; best5_stat_fs = 12; best5_players_fs = 13.5
-        footer_fs = 11
+def _render(data: dict, round_label: str = "") -> bytes:
+    ds = data["diff_series"]
+    ps = data["periods_series"]
+    runs = data["runs"]
+    lineups = data["lineups"]
+    hc, ac = data["home_code"], data["away_code"]
+    hn = dname(hc, data["home_team"])
+    an = dname(ac, data["away_team"])
+    fh, fa = data["final_home"], data["final_away"]
 
-    # ─── Bandeau de titre (logo ELSTATSLAB + round + logo EuroLeague) ──────
-    ax_title = fig.add_subplot(gs[0])
-    ax_title.axis("off"); ax_title.set_xlim(0, 1); ax_title.set_ylim(0, 1)
+    fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, facecolor=PAPER)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.axis("off")
 
-    if ELSTATSLAB_LOGO.exists():
-        brand_ax = ax_title.inset_axes([-0.075, -0.3, 0.16, 1.6])
-        brand_ax.imshow(plt.imread(str(ELSTATSLAB_LOGO)), interpolation="lanczos")
-        brand_ax.axis("off")
-    if EUROLEAGUE_LOGO.exists():
-        el_ax = ax_title.inset_axes([0.84, -0.1, 0.16, 1.2])
-        el_ax.imshow(plt.imread(str(EUROLEAGUE_LOGO)), interpolation="lanczos")
-        el_ax.axis("off")
+    # ── Title bar ───────────────────────────────────────────────────────
+    brand = _resolve(ELSTATSLAB_LOGO)
+    if brand.exists():
+        logo = _load_brand_logo(brand)
+        _image(ax, logo, *_fit(logo, 96, 96, 98, 84), z=6)
+    _text(ax, 170, 52, "GAME FLOW", 22, BARLOW_BOLD, ORANGE)
+    title = f"EuroLeague {round_label}".strip()
+    _text(ax, 170, 106, title, min(54, 1700 / max(len(title), 1)), BARLOW_BOLD, NAVY)
+    _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
 
-    title_text = f"Game Flow  |  EuroLeague {round_label}".strip()
-    ax_title.text(0.50, 0.5, title_text, ha="center", va="center",
-                  fontsize=title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
+    # ── Teams and final score ───────────────────────────────────────────
+    _draw_team(ax, 165, hc, hn)
+    _draw_team(ax, 835, ac, an)
+    _text(ax, 478, 226, f"{fh}", 96, BARLOW_BOLD, COLOR_HOME, ha="right")
+    _text(ax, 500, 222, "-", 70, BARLOW_REGULAR, GREY, ha="center")
+    _text(ax, 522, 226, f"{fa}", 96, BARLOW_BOLD, COLOR_AWAY, ha="left")
 
-    # ─── Header (logos équipes + score) ─────────────────────────────────────
-    ax_h = fig.add_subplot(gs[1])
-    ax_h.axis("off"); ax_h.set_xlim(0, 1); ax_h.set_ylim(0, 1)
+    # ── Chart card ──────────────────────────────────────────────────────
+    CARD_Y0, CARD_Y1 = 336, 748
+    PX0, PX1 = 118, 925
+    PY0, PY1 = 388, 706
+    _rbox(ax, 50, CARD_Y0, 900, CARD_Y1 - CARD_Y0, CARD, ec=RULE, r=18, z=1)
 
-    _draw_team(ax_h, hc, hn, 0.17)
-    ax_h.text(0.5, 0.55, f"{fh}  –  {fa}", ha="center", va="center",
-              fontsize=score_fs, fontweight="bold", color=COLOR_TEXT)
-    _draw_team(ax_h, ac, an, 0.83)
+    n = len(ds)
+    ymax = max(max(ds), 0) + 5
+    ymin = min(min(ds), 0) - 5
 
-    # ─── Chart ─────────────────────────────────────────────────────────────
-    ax = fig.add_subplot(gs[2])
-    ax.set_facecolor(COLOR_BG)
-    n = len(ds); x = list(range(n))
-    ax.plot(x, ds, color=COLOR_AXIS, linewidth=1.8, zorder=3)
-    ax.fill_between(x, ds, 0, where=[d>=0 for d in ds],
-                    color=COLOR_HOME, alpha=0.25, interpolate=True, zorder=2)
-    ax.fill_between(x, ds, 0, where=[d<=0 for d in ds],
-                    color=COLOR_AWAY, alpha=0.25, interpolate=True, zorder=2)
-    ax.axhline(0, color=COLOR_SUBTLE, linewidth=0.8, zorder=1)
-    ax.set_xlim(0, n-1)
-    ymax = max(max(ds),0)+5; ymin = min(min(ds),0)-5
-    ax.set_ylim(ymin, ymax)
-    ax.set_ylabel("Point differential", fontsize=10, color=COLOR_TEXT)
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v,_: f"{int(abs(v))}"))
-    ax.set_xticks([]); ax.set_xlabel("Game flow →", fontsize=10, color=COLOR_TEXT)
-    ax.yaxis.grid(True, color=COLOR_GRID, linewidth=0.7, zorder=0)
-    ax.set_axisbelow(True)
-    for s in ["top","right"]: ax.spines[s].set_visible(False)
-    for s in ["left","bottom"]: ax.spines[s].set_color(COLOR_SUBTLE)
+    def X(i):
+        return PX0 + (PX1 - PX0) * (i / max(n - 1, 1))
 
-    ax.text(-0.02, 1.02, hc, transform=ax.transAxes,
-            ha="right", va="bottom", fontsize=11, color=COLOR_HOME, fontweight="bold")
-    ax.text(-0.02, -0.02, ac, transform=ax.transAxes,
-            ha="right", va="top", fontsize=11, color=COLOR_AWAY, fontweight="bold")
+    def Y(v):
+        return PY0 + (PY1 - PY0) * (ymax - v) / (ymax - ymin)
+
+    step = _nice_step(ymax - ymin)
+    t = int(np.ceil(ymin / step)) * step
+    while t <= ymax:
+        if t != 0:
+            ax.plot([PX0, PX1], [Y(t), Y(t)], color=RULE, lw=0.9, zorder=2)
+        _text(ax, PX0 - 12, Y(t), f"{abs(t)}", 18, BARLOW_SEMIBOLD, GREY, ha="right")
+        t += step
+
+    for r in runs:
+        si, ei = r["start_idx"], r["end_idx"]
+        c = COLOR_HOME if r["team"] == "home" else COLOR_AWAY
+        ax.add_patch(Rectangle((X(si), PY0), X(ei) - X(si), PY1 - PY0,
+                               facecolor=c, edgecolor="none", alpha=0.13, zorder=2))
+        _text(ax, (X(si) + X(ei)) / 2, PY0 + 14, f"+{r['pts']}", 20, BARLOW_BOLD, c, ha="center")
+
+    xs = np.array([X(i) for i in range(n)])
+    ys = np.array([Y(v) for v in ds])
+    y0 = Y(0)
+    ax.fill_between(xs, ys, y0, where=ys <= y0, color=COLOR_HOME, alpha=0.22,
+                    interpolate=True, linewidth=0, zorder=3)
+    ax.fill_between(xs, ys, y0, where=ys >= y0, color=COLOR_AWAY, alpha=0.28,
+                    interpolate=True, linewidth=0, zorder=3)
+    ax.plot([PX0, PX1], [y0, y0], color=GREY, lw=1.1, zorder=4)
+    ax.plot(xs, ys, color=NAVY, lw=2.6, zorder=5, solid_joinstyle="round")
 
     for idx_b, period in _qt_bounds(ps):
         if period <= 4:
-            ax.axvline(idx_b, color=COLOR_QT, linewidth=1.0, alpha=0.7, zorder=1)
-            ax.text(idx_b, ymin+0.5, f"Q{period}", ha="center", va="bottom",
-                    fontsize=8, color=COLOR_QT, fontweight="bold")
+            ax.plot([X(idx_b)] * 2, [PY0, PY1], color=RULE, lw=1.4, zorder=2)
+            _text(ax, X(idx_b) + 8, PY1 - 14, f"Q{period}", 18, BARLOW_BOLD, GREY, ha="left")
         else:
-            ax.axvline(idx_b, color=COLOR_OT, linewidth=0.8, linestyle="--", alpha=0.5, zorder=1)
-            ax.text(idx_b, ymin+0.5, f"OT{period-4}", ha="center", va="bottom",
-                    fontsize=7, color=COLOR_OT, style="italic")
+            ax.plot([X(idx_b)] * 2, [PY0, PY1], color=GREY, lw=1.0, ls=(0, (4, 4)), zorder=2)
+            _text(ax, X(idx_b) + 8, PY1 - 14, f"OT{period - 4}", 18, BARLOW_BOLD, GREY, ha="left")
+    if ps:
+        _text(ax, PX0 + 8, PY1 - 14, "Q1", 18, BARLOW_BOLD, GREY, ha="left")
 
-    for r in runs:
-        si=r["start_idx"]; ei=r["end_idx"]
-        c=COLOR_HOME if r["team"]=="home" else COLOR_AWAY
-        ax.axvspan(si, ei, color=c, alpha=0.18, zorder=1)
-        ax.text((si+ei)/2, ymax-1, f"+{r['pts']}", ha="center", va="top",
-                fontsize=10, color=c, fontweight="bold", zorder=5)
+    ax.add_patch(Rectangle((70, CARD_Y0 + 20), 8, 24, facecolor=COLOR_HOME, edgecolor="none", zorder=5))
+    _fit_text(ax, 90, CARD_Y0 + 33, f"{hn} ahead", 22, BARLOW_SEMIBOLD, NAVY, max_w=380)
+    ax.add_patch(Rectangle((70, CARD_Y1 - 44), 8, 24, facecolor=COLOR_AWAY, edgecolor="none", zorder=5))
+    _fit_text(ax, 90, CARD_Y1 - 31, f"{an} ahead", 22, BARLOW_SEMIBOLD, NAVY, max_w=380)
+    _text(ax, 930, CARD_Y1 - 31, "Point differential", 20, BARLOW_REGULAR, GREY, ha="right")
 
-    # ─── Biggest runs ──────────────────────────────────────────────────────
-    ax_r = fig.add_subplot(gs[3])
-    ax_r.set_facecolor(COLOR_BG); ax_r.set_xlim(0,10); ax_r.set_ylim(0,10); ax_r.axis("off")
-    ax_r.text(5, 9.5, "BIGGEST RUNS", ha="center", va="center",
-              fontsize=best5_title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
+    # ── Biggest runs ────────────────────────────────────────────────────
+    _text(ax, 500, 772, "BIGGEST RUNS", 28, BARLOW_BOLD, NAVY, ha="center")
     if runs:
         sr = sorted(runs, key=lambda r: -r["pts"])[:3]
-        n_runs = len(sr)
-        row_h_run = 2.4
-        y0 = 5.1 + (n_runs - 1) * row_h_run / 2
         for i, r in enumerate(sr):
-            y = y0 - i * row_h_run
+            cy = 818 + i * 46
             code = hc if r["team"] == "home" else ac
             c = COLOR_HOME if r["team"] == "home" else COLOR_AWAY
-            ld = r.get("leader", ""); lp_ = r.get("leader_pts")
+            ld = r.get("leader", "")
+            lp_ = r.get("leader_pts")
             detail = f"led by {ld}" + (f", {lp_} pts" if lp_ is not None else "")
-
-            chip = plt.matplotlib.patches.FancyBboxPatch(
-                (0.4, y - row_h_run * 0.34), 9.2, row_h_run * 0.66,
-                boxstyle="round,pad=0.02", facecolor="#f5f6f7", edgecolor="none",
-            )
-            ax_r.add_patch(chip)
-            accent = plt.matplotlib.patches.FancyBboxPatch(
-                (0.4, y - row_h_run * 0.32), 0.10, row_h_run * 0.62,
-                boxstyle="round,pad=0.005", facecolor=c, edgecolor="none",
-            )
-            ax_r.add_patch(accent)
-
-            ax_r.text(1.1, y, f"{code} +{r['pts']}", ha="left", va="center",
-                      fontsize=run_fs + 2.5, fontproperties=BARLOW_BOLD, color=c)
-            _fit_text(ax_r, 9.1, y, detail, fontsize=run_fs + 1.5, max_width_in=6.0,
-                      fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a", ha="right", va="center")
-        ax_r.text(5, 0.3, "A run is a streak of points scored without the opponent scoring.",
-                  ha="center", va="center", fontsize=8, fontproperties=BARLOW_REGULAR,
-                  color=COLOR_SUBTLE, style="italic")
+            _rbox(ax, 50, cy - 19, 900, 38, CARD, ec=RULE, r=10, lw=1.0, z=2)
+            ax.add_patch(Rectangle((50, cy - 19), 8, 38, facecolor=c, edgecolor="none", zorder=3))
+            _text(ax, 80, cy, f"{code} +{r['pts']}", 28, BARLOW_BOLD, c)
+            _fit_text(ax, 925, cy, detail, 24, BARLOW_SEMIBOLD, NAVY, max_w=620, ha="right")
+        _text(ax, 500, 950, "A run is a streak of points scored without the opponent scoring.",
+              17, BARLOW_REGULAR, GREY, ha="center")
     else:
-        ax_r.text(5, 5, "No runs ≥ 9 pts detected", ha="center", va="center",
-                  fontsize=10, fontproperties=BARLOW_REGULAR, color=COLOR_SUBTLE, style="italic")
+        _text(ax, 500, 830, "No runs of 9 points or more detected", 22, BARLOW_REGULAR, GREY, ha="center")
 
-    # ─── Best 5 ────────────────────────────────────────────────────────────
-    ax_b = fig.add_subplot(gs[4])
-    ax_b.set_facecolor(COLOR_BG); ax_b.set_xlim(0,10); ax_b.set_ylim(0,10); ax_b.axis("off")
-    ax_b.text(5, 9.5, "BEST 5 BY NETRTG", ha="center", va="center",
-              fontsize=best5_title_fs, fontproperties=BARLOW_BOLD, color=COLOR_TEXT)
+    # ── Best 5 by NetRtg ────────────────────────────────────────────────
+    _text(ax, 500, 982, "BEST 5 BY NETRTG", 28, BARLOW_BOLD, NAVY, ha="center")
     for lu, x0, tc in [
-        (next((l for l in lineups if l["team_code"]==hc),None), 0.3, COLOR_HOME),
-        (next((l for l in lineups if l["team_code"]==ac),None), 5.2, COLOR_AWAY),
+        (next((l for l in lineups if l["team_code"] == hc), None), 50, COLOR_HOME),
+        (next((l for l in lineups if l["team_code"] == ac), None), 520, COLOR_AWAY),
     ]:
-        if not lu: continue
-        xp = x0 + 2.25
-        card = plt.matplotlib.patches.FancyBboxPatch(
-            (x0, 0.6), 4.5, 7.6,
-            boxstyle="round,pad=0.03", facecolor="#f5f6f7", edgecolor="none",
-        )
-        ax_b.add_patch(card)
-        top_accent = plt.matplotlib.patches.FancyBboxPatch(
-            (x0, 7.75), 4.5, 0.16,
-            boxstyle="round,pad=0.005", facecolor=tc, edgecolor="none",
-        )
-        ax_b.add_patch(top_accent)
+        if not lu:
+            continue
+        cw, cy0, ch = 430, 1014, 148
+        _rbox(ax, x0, cy0, cw, ch, CARD, ec=RULE, r=16, lw=1.0, z=2)
+        ax.add_patch(Rectangle((x0 + 16, cy0), cw - 32, 6, facecolor=tc, edgecolor="none", zorder=3))
+        cx = x0 + cw / 2
+        _fit_text(ax, cx, cy0 + 36, dname(lu["team_code"], lu["team"]), 28, BARLOW_BOLD, tc,
+                  max_w=cw - 40, ha="center")
+        _text(ax, cx, cy0 + 68,
+              f"{lu['pts_for']}-{lu['pts_against']}   ·   NetRtg {lu['net_rtg']:+.1f}   ·   {lu['min']}",
+              21, BARLOW_SEMIBOLD, NAVY, ha="center")
+        pl = list(lu["players"])
+        l1, l2 = "  ·  ".join(pl[:3]), "  ·  ".join(pl[3:])
+        _fit_text(ax, cx, cy0 + 102, l1, 22, BARLOW_REGULAR, NAVY, max_w=cw - 30, ha="center")
+        if l2:
+            _fit_text(ax, cx, cy0 + 130, l2, 22, BARLOW_REGULAR, NAVY, max_w=cw - 30, ha="center")
 
-        tl = dname(lu["team_code"], lu["team"])
-        ax_b.text(xp, 6.9, tl, ha="center", va="center",
-                  fontsize=best5_team_fs, fontproperties=BARLOW_BOLD, color=tc)
-        ax_b.text(xp, 5.5, f"{lu['pts_for']}-{lu['pts_against']}   ·   NetRtg {lu['net_rtg']:+.1f}   ·   {lu['min']}",
-                  ha="center", va="center", fontsize=best5_stat_fs, fontproperties=BARLOW_SEMIBOLD, color=COLOR_TEXT)
-
-        # 5 joueurs sur une seule ligne : taille mesurée sur le vrai rendu,
-        # réduite automatiquement si la liste est trop longue pour la carte
-        # (plutôt qu'une taille fixe qui déborde selon les noms du match).
-        _fit_text(ax_b, xp, 2.7, "  ·  ".join(lu["players"]),
-                  fontsize=best5_players_fs + 1, max_width_in=4.1,
-                  fontproperties=BARLOW_SEMIBOLD, color="#1a1a1a", ha="center", va="center")
-
-# ─── Footer ────────────────────────────────────────────────────────────
-    ax_f = fig.add_subplot(gs[5])
-    ax_f.axis("off"); ax_f.set_xlim(0,1); ax_f.set_ylim(0,1)
-    ax_f.text(0.47, 0.64, "DataViz By EL_STATSLAB", ha="right", va="center",
-              fontsize=footer_fs + 4, fontproperties=BARLOW_BOLD, color="#1a1a1a")
-    ax_f.text(0.5, 0.64, "·", ha="center", va="center",
-              fontsize=footer_fs + 4, color="#bbbbbb")
-    ax_f.text(0.53, 0.64, "Insights, Trends, Metrics, Dataviz", ha="left", va="center",
-              fontsize=footer_fs - 0.5, fontproperties=BARLOW_SEMIBOLD, color="#e8491c")
-    ax_f.text(0.5, 0.24, "𝕏 @EL_Statslab   ·   elstatslab.com",
-              ha="center", va="center", fontsize=footer_fs - 0.5,
-              fontproperties=BARLOW_REGULAR, color="#888888")
+    # ── Footer ──────────────────────────────────────────────────────────
+    ax.plot([50, 950], [1172, 1172], color=NAVY, lw=1.6, zorder=2)
+    _text(ax, 50, 1198, "DataViz By EL_STATSLAB", 25, BARLOW_BOLD, NAVY)
+    _text(ax, 50, 1224, "Insights, Trends, Metrics, Dataviz", 19, BARLOW_SEMIBOLD, ORANGE)
+    _text(ax, 950, 1198, "X @EL_Statslab", 25, BARLOW_BOLD, NAVY, ha="right")
+    _text(ax, 950, 1224, "elstatslab.com", 19, BARLOW_REGULAR, GREY, ha="right")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=COLOR_BG, dpi=120)
-    buf.seek(0)
-    png = buf.read()
-    if output_path:
-        Path(output_path).write_bytes(png)
-        print(f"PNG écrit : {output_path}")
+    fig.savefig(buf, format="png", facecolor=PAPER, dpi=DPI)
     plt.close(fig)
-    return png
+    buf.seek(0)
+    return buf.getvalue()
 
 
 if __name__ == "__main__":
