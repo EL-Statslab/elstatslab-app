@@ -6,7 +6,7 @@ Deux points d'entree, appeles depuis app.py :
   render_shot_maps_tab   : onglet "Shot Maps" (choix competition, saison, equipe)
 
 Dans la vue match, les cartes ne sont calculees qu'au clic sur "Show shot maps" et s'affichent
-d'abord en miniature ; la taille normale (1800 x 1800, telechargeable) n'est produite qu'au clic
+d'abord en miniature ; la taille normale (1800 x 2250, telechargeable) n'est produite qu'au clic
 sur "View full size", pour une seule equipe a la fois. Cela evite de surcharger l'app a chaque
 ouverture d'un match.
 """
@@ -32,16 +32,16 @@ SEP_PX = 6             # trait de separation entre les deux cartes dans l'image 
 
 
 def _side_by_side(png_left: bytes, png_right: bytes) -> bytes:
-    """Colle deux images PNG cote a cote sur fond blanc (par defaut 3600 x 1800 px)."""
+    """Colle deux images PNG cote a cote sur le fond papier ELSTATSLAB (par defaut 3600 x 2250 px)."""
     from PIL import Image, ImageDraw
 
     with Image.open(io.BytesIO(png_left)) as a, Image.open(io.BytesIO(png_right)) as b:
         a, b = a.convert("RGB"), b.convert("RGB")
-        canvas = Image.new("RGB", (a.width + SEP_PX + b.width, max(a.height, b.height)), "white")
+        canvas = Image.new("RGB", (a.width + SEP_PX + b.width, max(a.height, b.height)), (243, 238, 228))
         canvas.paste(a, (0, 0))
         canvas.paste(b, (a.width + SEP_PX, 0))
         x = a.width + SEP_PX // 2
-        ImageDraw.Draw(canvas).line([(x, 60), (x, canvas.height - 60)], fill=(224, 224, 224), width=SEP_PX)
+        ImageDraw.Draw(canvas).line([(x, 60), (x, canvas.height - 60)], fill=(225, 216, 198), width=SEP_PX)
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
     return buf.getvalue()
@@ -90,9 +90,9 @@ USE_TEAM_LOGOS = True
 # cliquer sur "Show shot maps" (utile si l'app devait un jour manquer de memoire).
 SHOW_ON_OPEN = True
 
-THUMB_DPI = 60         # miniature dans la vue match (720 px)
-TAB_DPI = 75           # apercu dans l'onglet Shot Maps (900 px)
-FULL_DPI = 150         # taille normale et image telechargeable (1800 px)
+THUMB_DPI = 60         # miniature dans la vue match (720 x 900 px)
+TAB_DPI = 75           # apercu dans l'onglet Shot Maps (900 x 1125 px)
+FULL_DPI = 150         # taille normale et image telechargeable (1800 x 2250 px)
 
 
 # ------------------------------------------------------------------ DATA (cache)
