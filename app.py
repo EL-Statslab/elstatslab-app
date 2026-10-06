@@ -2825,49 +2825,15 @@ def track_visit_once() -> None:
     info: dict = {"step": "start"}
     st.session_state["_gc_info"] = info
 
-    # Owner switch. Open the site once with ?me=1 on each of your devices and
-    # that browser is never counted again (a small cookie is stored in it).
-    # Open it once with ?me=0 to count that device again.
-    me_param = st.query_params.get("me")
-    owner_cookie = ""
-    try:
-        owner_cookie = st.context.cookies.get("elstatslab_owner", "") or ""
-    except Exception:
-        pass
-    if me_param in ("0", "1"):
-        import streamlit.components.v1 as components
-        if me_param == "1":
-            cookie_str = "elstatslab_owner=1; max-age=31536000; path=/; SameSite=Lax; Secure"
-        else:
-            cookie_str = "elstatslab_owner=; max-age=0; path=/; SameSite=Lax; Secure"
-        # The small line printed by this script says whether the browser
-        # accepted the cookie (visible only when ?me= or ?gcdebug is used).
-        cookie_html = (
-            "<body style='font:13px sans-serif;margin:0;color:#14213D'><script>"
-            "var m='';"
-            f"try{{document.cookie='{cookie_str}';"
-            "m+='cookie check: '+(document.cookie.indexOf('elstatslab_owner=1')>=0?'stored':'not stored');}"
-            "catch(e){m+='cookie error: '+e;}"
-            f"try{{window.parent.document.cookie='{cookie_str}';"
-            "m+=' | parent: '+(window.parent.document.cookie.indexOf('elstatslab_owner=1')>=0?'stored':'not stored');}"
-            "catch(e){m+=' | parent error: '+e;}"
-            "document.body.textContent=m;"
-            "</script></body>"
-        )
-        components.html(cookie_html, height=40)
+    # Owner switch. A visit whose address ends with ?me=1 is not counted.
+    # Streamlit Cloud does not pass browser cookies to the app, so this has to
+    # be in the address each time: use a bookmark that includes ?me=1.
+    if st.query_params.get("me") == "1":
+        info["step"] = "stopped: owner visit (?me=1)"
         try:
-            st.toast("This browser is now excluded from visitor counts."
-                     if me_param == "1"
-                     else "This browser is counted again.")
+            st.toast("This visit is not counted.")
         except Exception:
             pass
-    info["owner_cookie"] = owner_cookie or "(none)"
-    try:
-        info["cookie_names_seen_by_server"] = list(st.context.cookies.keys())
-    except Exception as e:
-        info["cookie_names_seen_by_server"] = f"unavailable ({type(e).__name__})"
-    if me_param == "1" or (owner_cookie == "1" and me_param != "0"):
-        info["step"] = "stopped: owner device"
         return
 
     try:
