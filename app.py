@@ -1594,6 +1594,114 @@ def _ip_delta_bg(metric: str, delta: float) -> str:
     return "#f5f5f5"
 
 
+_IP_CSS = """<style>
+.ip-card{background:#fff;border:1px solid #E1D8C6;border-top:5px solid var(--ip-side,#14213D);
+ border-radius:16px;padding:18px 22px 16px;margin:4px 0 12px;}
+.ip-kick{font-size:.95rem;letter-spacing:.14em;text-transform:uppercase;color:#6B7280;font-weight:600;}
+.ip-name{font-size:2.1rem;font-weight:700;color:#14213D;line-height:1.1;margin-top:2px;}
+.ip-pills{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;}
+.ip-pill{font-size:.85rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+ padding:3px 12px;border-radius:999px;border:1px solid;}
+.ip-pill.dm{color:#E4572E;border-color:#E4572E;background:rgba(228,87,46,.10);}
+.ip-pill.pos{color:#1E7A37;border-color:#2ea043;background:rgba(46,160,67,.12);}
+.ip-pill.neg{color:#B02A28;border-color:#da3633;background:rgba(218,54,51,.10);}
+.ip-sub{margin-top:10px;font-size:1rem;color:#6B7280;}
+.ip-tbl{background:#fff;border:1px solid #E1D8C6;border-radius:16px;overflow:hidden;margin-bottom:12px;}
+.ip-row{display:grid;grid-template-columns:1.25fr 1fr 1fr 1fr;align-items:stretch;
+ border-top:1px solid #EFE8D8;font-variant-numeric:tabular-nums;}
+.ip-row.h{background:#FBF8F1;border-top:none;border-bottom:2px solid #14213D;}
+.ip-row>div{padding:9px 14px;font-size:1.05rem;display:flex;align-items:center;justify-content:center;}
+.ip-row>div:first-child{justify-content:flex-start;font-weight:700;color:#14213D;letter-spacing:.03em;}
+.ip-row.h>div{font-size:.85rem;letter-spacing:.12em;color:#6B7280;font-weight:700;padding:8px 14px;}
+.ip-on{font-weight:700;color:#14213D;}
+.ip-on.good{background:rgba(46,160,67,.18);}
+.ip-on.bad{background:rgba(218,54,51,.16);}
+.ip-off{color:#6B7280;}
+.ip-d{font-weight:700;color:#6B7280;}
+.ip-d.good{color:#1E7A37;}
+.ip-d.bad{color:#B02A28;}
+.ip-rk{background:#fff;border:1px solid #E1D8C6;border-radius:12px;overflow-x:auto;}
+.ip-rk .ip-rrow{display:grid;grid-template-columns:34px 1.6fr .8fr 1fr 1fr .9fr .9fr;min-width:560px;
+ border-top:1px solid #EFE8D8;font-variant-numeric:tabular-nums;}
+.ip-rk .ip-rrow>div{padding:7px 10px;font-size:.98rem;text-align:right;color:#14213D;}
+.ip-rk .ip-rrow>div:nth-child(2){text-align:left;font-weight:600;}
+.ip-rk .ip-rrow>div:first-child{text-align:center;color:#6B7280;}
+.ip-rk .ip-rrow.h{background:#FBF8F1;border-top:none;border-bottom:2px solid #14213D;}
+.ip-rk .ip-rrow.h>div{white-space:nowrap;font-size:.8rem;letter-spacing:.1em;color:#6B7280;font-weight:700;}
+.ip-rk .ip-rrow.top{background:rgba(228,87,46,.07);}
+.ip-rk .ip-rrow.top>div:nth-child(2){color:#E4572E;}
+.ip-rk .ip-rrow>div.good{color:#1E7A37;font-weight:700;}
+.ip-rk .ip-rrow>div.bad{color:#B02A28;font-weight:700;}
+</style>"""
+
+
+def _ip_state(metric: str, delta: float) -> str:
+    """good / bad / flat for an On/Off delta (threshold 0.3, lower is better for DRTG and TOV%)."""
+    if metric in IP_LOWER_IS_BETTER:
+        delta = -delta
+    if delta >= 0.3:
+        return "good"
+    if delta <= -0.3:
+        return "bad"
+    return ""
+
+
+def _ip_card_html(disp: str, r, side_color: str) -> str:
+    import html as _h
+    score = float(r["impact_score"])
+    cls = "pos" if score >= 0 else "neg"
+    return (
+        _IP_CSS
+        + f"<div class='ip-card' style='--ip-side:{side_color};'>"
+        f"<div class='ip-kick'>{_h.escape(str(disp))}</div>"
+        f"<div class='ip-name'>{_h.escape(str(r['player_name']))}</div>"
+        f"<div class='ip-pills'><span class='ip-pill dm'>Difference Maker</span>"
+        f"<span class='ip-pill {cls}'>Impact Score {score:+.2f}</span></div>"
+        f"<div class='ip-sub'>{int(round(r['on_poss']))} poss ON · min. threshold {_ip_min_poss(r)} poss</div>"
+        f"</div>"
+    )
+
+
+def _ip_table_html(r) -> str:
+    rows = ""
+    for m in IP_METRICS_DISPLAY:
+        on_col, off_col = IP_METRIC_COLS[m]
+        on_val, off_val = r[on_col], r[off_col]
+        delta = on_val - off_val
+        st_ = _ip_state(m, delta)
+        rows += (
+            f"<div class='ip-row'><div>{m}</div>"
+            f"<div class='ip-on {st_}'>{on_val:.1f}</div>"
+            f"<div class='ip-off'>{off_val:.1f}</div>"
+            f"<div class='ip-d {st_}'>{delta:+.1f}</div></div>"
+        )
+    return (
+        "<div class='ip-tbl'>"
+        "<div class='ip-row h'><div>METRIC</div><div>ON</div><div>OFF</div><div>DIFF</div></div>"
+        f"{rows}</div>"
+    )
+
+
+def _ip_ranking_html(ranking: list) -> str:
+    import html as _h
+    out = ("<div class='ip-rk'><div class='ip-rrow h'><div>#</div><div>PLAYER</div><div>SCORE</div>"
+           "<div>NET ON</div><div>NET OFF</div><div>DIFF</div><div>POSS</div></div>")
+    for i, p in enumerate(ranking, 1):
+        on_, off_ = p.get("on_netrtg", 0), p.get("off_netrtg", 0)
+        d = on_ - off_
+        sc = p["score"]
+        sc_cls = "good" if sc > 0 else ("bad" if sc < 0 else "")
+        d_cls = "good" if d >= 0.3 else ("bad" if d <= -0.3 else "")
+        out += (
+            f"<div class='ip-rrow{' top' if i == 1 else ''}'><div>{i}</div>"
+            f"<div>{_h.escape(str(p['name']))}</div>"
+            f"<div class='{sc_cls}'>{sc:+.2f}</div><div>{on_:.1f}</div><div>{off_:.1f}</div>"
+            f"<div class='{d_cls}'>{d:+.1f}</div><div>{p.get('on_poss', 0):.0f}</div></div>"
+        )
+    return out + "</div>"
+
+
+
 def render_impact_pulse_section(gamecode: int, season: int,
                                 home_code: str, away_code: str,
                                 home_disp: str, away_disp: str,
@@ -1631,111 +1739,17 @@ def render_impact_pulse_section(gamecode: int, season: int,
             score_str = f"{score:+.2f}"
             score_color = "#2ea043" if score >= 0 else "#da3633"
 
+            side_color = "#14213D" if col is col_h else "#E4572E"
             with col:
-                # Card joueur
-                st.markdown(
-                    f"<div style='background:#ffffff;border:1px solid #e0e0e0;"
-                    f"border-radius:10px;padding:14px 16px 10px 16px;margin-bottom:10px;'>"
-                    f"<div style='font-size:0.65rem;letter-spacing:0.14em;color:#888888;"
-                    f"text-transform:uppercase;font-weight:600;'>{disp}</div>"
-                    f"<div style='font-size:1.35rem;font-weight:700;color:#1a1a1a;margin-top:2px;'>"
-                    f"{r['player_name']}</div>"
-                    f"<div style='margin-top:6px;'>"
-                    f"<span style='background:#fff8e1;border:1px solid #f9a825;"
-                    f"color:#f57f17;font-size:0.6rem;font-weight:700;letter-spacing:0.1em;"
-                    f"padding:2px 8px;border-radius:20px;text-transform:uppercase;'>"
-                    f"Difference Maker</span>"
-                    f"&nbsp;"
-                    f"<span style='background:#e8f5e9;border:1px solid #2ea043;"
-                    f"color:#2e7d32;font-size:0.6rem;font-weight:700;letter-spacing:0.1em;"
-                    f"padding:2px 8px;border-radius:20px;'>"
-                    f"Impact Pulse · Score {score_str}</span>"
-                    f"</div>"
-                    f"<div style='font-size:0.65rem;color:#aaaaaa;margin-top:6px;'>"
-                    f"{int(round(r['on_poss']))} poss ON · min. threshold {_ip_min_poss(r)} poss</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-                # Tableau ON/OFF
-                def _ip_delta_color(metric, delta):
-                    if metric in IP_LOWER_IS_BETTER:
-                        good = delta <= -0.3
-                        bad  = delta >= 0.3
-                    else:
-                        good = delta >= 0.3
-                        bad  = delta <= -0.3
-                    if good:
-                        return "color:#2e7d32;font-weight:bold;"
-                    if bad:
-                        return "color:#c62828;font-weight:bold;"
-                    return "color:#888;"
-
-                rows_html = ""
-                for m in IP_METRICS_DISPLAY:
-                    on_col, off_col = IP_METRIC_COLS[m]
-                    on_val  = r[on_col]
-                    off_val = r[off_col]
-                    delta   = on_val - off_val
-                    delta_str = f"{delta:+.1f}"
-                    bg = _ip_delta_bg(m, delta)
-                    dcol = _ip_delta_color(m, delta)
-                    rows_html += (
-                        f"<tr>"
-                        f"<td style='padding:6px 8px;background:{bg};font-weight:bold;"
-                        f"text-align:center;border-bottom:1px solid #eee;'>{on_val:.1f}</td>"
-                        f"<td style='padding:6px 8px;background:#f5f5f5;text-align:center;"
-                        f"color:#555;border-bottom:1px solid #eee;'>{m}</td>"
-                        f"<td style='padding:6px 8px;text-align:center;"
-                        f"border-bottom:1px solid #eee;color:#777;'>{off_val:.1f}</td>"
-                        f"<td style='padding:6px 8px;text-align:center;"
-                        f"border-bottom:1px solid #eee;{dcol}'>{delta_str}</td>"
-                        f"</tr>"
-                    )
-
-                table_html = (
-                    "<div style='width:100%;overflow-x:auto;'>"
-                    "<table style='width:100%;border-collapse:collapse;"
-                    "font-family:sans-serif;font-size:0.88rem;'>"
-                    "<thead><tr>"
-                    "<th style='padding:6px 4px;text-align:center;color:#666;"
-                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>ON</th>"
-                    "<th style='padding:6px 4px;text-align:center;color:#666;"
-                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>Metric</th>"
-                    "<th style='padding:6px 4px;text-align:center;color:#666;"
-                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>OFF</th>"
-                    "<th style='padding:6px 4px;text-align:center;color:#666;"
-                    "font-size:0.75rem;border-bottom:2px solid #ddd;'>Δ</th>"
-                    "</tr></thead>"
-                    f"<tbody>{rows_html}</tbody>"
-                    "</table></div>"
-                )
-                st.markdown(table_html, unsafe_allow_html=True)
+                st.markdown(_ip_card_html(disp, r, side_color), unsafe_allow_html=True)
+                st.markdown(_ip_table_html(r), unsafe_allow_html=True)
 
                 # Full ranking dans un expander imbriqué
                 if r.get("full_ranking"):
                     try:
                         ranking = json.loads(r["full_ranking"])
                         with st.expander(f"Full ranking — {code}"):
-                            rank_rows = []
-                            for i, p in enumerate(ranking, 1):
-                                net_on  = p.get("on_netrtg", 0)
-                                net_off = p.get("off_netrtg", 0)
-                                delta   = net_on - net_off
-                                rank_rows.append({
-                                    "#":           i,
-                                    "Player":      p["name"],
-                                    "Score":       f"{p['score']:+.2f}",
-                                    "NETRTG ON":   net_on,
-                                    "NETRTG OFF":  net_off,
-                                    "Δ NETRTG":    f"{delta:+.1f}",
-                                    "Poss ON":     p.get("on_poss", 0),
-                                })
-                            st.dataframe(
-                                pd.DataFrame(rank_rows),
-                                hide_index=True,
-                                use_container_width=True,
-                            )
+                            st.markdown(_ip_ranking_html(ranking), unsafe_allow_html=True)
                     except Exception:
                         pass
 
