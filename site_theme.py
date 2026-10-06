@@ -12,10 +12,19 @@ Usage in app.py, right after st.set_page_config(...):
     apply_theme()
 
 Also put .streamlit/config.toml at the root of the repo (base colours).
-Pure CSS: no app logic changes, remove the two lines above to go back.
+Logos: badge_logo_b64(path) returns a cropped, square, white background version
+of a team logo (sponsor block removed, same size footprint for every club), so all
+crests look alike inside the badge. See the logo_b64 replacement in app.py.
 """
 
+import base64
+import io
+from functools import lru_cache
+from pathlib import Path
+
+import numpy as np
 import streamlit as st
+from PIL import Image
 
 PAPER = "#F3EEE4"
 CARD = "#FBF8F1"
@@ -92,12 +101,18 @@ hr {{ border-color: var(--el-rule) !important; }}
 }}
 .stApp .stMarkdown table td[style*="rgb(136, 136, 136)"] {{ color: var(--el-grey) !important; }}
 
-/* ---- team header: crest on a white badge ---- */
+/* ---- crests: one fixed badge size everywhere (logos come from badge_logo_b64) ---- */
 .stApp .stMarkdown img[style*="object-fit: contain"] {{
-  background: #fff; padding: 10px; border-radius: 22px; border: 2px solid var(--el-rule);
-  box-sizing: content-box;
+  max-width: none !important; max-height: none !important;
+  object-fit: contain; box-sizing: border-box;
+  background: #fff; border-radius: 20px; border: 2px solid var(--el-rule); padding: 8px;
 }}
-.stApp .stMarkdown div[style*="height: 140px"] {{ height: auto !important; min-height: 160px; padding: 14px 0 4px; }}
+.stApp .stMarkdown div[style*="height: 140px"] img {{ width: 128px; height: 128px; }}
+.stApp .stMarkdown div[style*="height: 72px"] img {{ width: 80px; height: 80px; border-radius: 16px; padding: 6px; }}
+
+/* ---- team header ---- */
+.stApp .stMarkdown div[style*="height: 140px"] {{ height: auto !important; min-height: 140px; padding: 14px 0 4px; }}
+.stApp .stMarkdown div[style*="height: 72px"] {{ height: 88px !important; }}
 .stApp .stMarkdown div[style*="height: 20px"][style*="text-align: center"] {{ height: auto !important; margin-top: 10px !important; }}
 .stApp .stMarkdown div[style*="font-weight: bold"][style*="font-size: 1rem"] {{
   font-size: 1.55rem !important; font-weight: 700 !important; color: var(--el-navy); min-height: 40px !important;
@@ -122,3 +137,53 @@ hr {{ border-color: var(--el-rule) !important; }}
 def apply_theme() -> None:
     """Injects the ELSTATSLAB paper theme. Call once, right after set_page_config."""
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+# =============================================================================
+# LOGOS
+# =============================================================================
+def _autocrop(img: np.ndarray) -> np.ndarray:
+    """Trims transparent margins and drops a sponsor block separated from the crest
+    by a real empty band (same rule as _autocrop_logo in app.py)."""
+    alpha = img[:, :, 3]
+    ys, xs = np.where(alpha > 0.04)
+    if len(xs) == 0:
+        return img
+    cropped = img[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h = cropped.shape[0]
+    row_has = (cropped[:, :, 3] > 0.04).sum(axis=1)
+    threshold = cropped.shape[1] * 0.005
+    gap_start = None
+    for i, v in enumerate(row_has):
+        if v < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None and (i - gap_start) > h * 0.015 and gap_start > h * 0.25:
+                cropped = cropped[:gap_start]
+                ys2, xs2 = np.where(cropped[:, :, 3] > 0.04)
+                if len(xs2):
+                    cropped = cropped[ys2.min():ys2.max() + 1, xs2.min():xs2.max() + 1]
+                return cropped
+            gap_start = None
+    return cropped
+
+
+@lru_cache(maxsize=64)
+def badge_logo_b64(path: str) -> str:
+    """Square 240 px PNG, crest cropped and centred on white, base64 encoded.
+    Every club gets the same footprint, so logos look consistent on the site."""
+    im = Image.open(Path(path)).convert("RGBA")
+    im.thumbnail((900, 900), Image.LANCZOS)
+    arr = _autocrop(np.asarray(im, dtype=np.float32) / 255.0)
+    a = arr[:, :, 3:4]
+    rgb = arr[:, :, :3] * a + (1.0 - a)
+    crest = Image.fromarray((rgb * 255).astype("uint8"), "RGB")
+    box = 240
+    inner = int(box * 0.86)
+    crest.thumbnail((inner, inner), Image.LANCZOS)
+    canvas = Image.new("RGB", (box, box), "white")
+    canvas.paste(crest, ((box - crest.width) // 2, (box - crest.height) // 2))
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
