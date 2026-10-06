@@ -281,11 +281,11 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     brand = _resolve(ELSTATSLAB_LOGO)
     if brand.exists():
         logo = _load_brand_logo(brand)
-        _image(ax, logo, *_fit(logo, 96, 96, 98, 84), z=6)
-    _text(ax, 170, 54, "MATCHUP", 17, BARLOW_BOLD, ORANGE)
+        _image(ax, logo, *_fit(logo, 124, 124, 112, 92), z=6)
+    _text(ax, 200, 52, "MATCHUP", 22, BARLOW_BOLD, ORANGE)
     title = f"EuroLeague {round_label}".strip()
-    _text(ax, 170, 104, title, min(54, 1700 / max(len(title), 1)), BARLOW_BOLD, NAVY)
-    _text(ax, W - 50, 54, "EUROLEAGUE", 16, BARLOW_BOLD, GREY, ha="right")
+    _text(ax, 200, 106, title, min(54, 1550 / max(len(title), 1)), BARLOW_BOLD, NAVY)
+    _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
 
     # ── Teams ───────────────────────────────────────────────────────────
     is_post = round_ in ("PO", "FF", "PI")
