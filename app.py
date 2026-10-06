@@ -78,6 +78,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+from site_theme import apply_theme
+apply_theme()
+
 # =============================================================================
 # LOGO MAPPING
 # =============================================================================
