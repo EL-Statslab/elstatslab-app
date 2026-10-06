@@ -242,14 +242,22 @@ def _fit(img: np.ndarray, box_w: float, box_h: float, cx: float, cy: float):
 
 
 def _draw_team(ax, cx, code, name, colour=NAVY):
-    box_y = 160
+    box_y = 178
     _rbox(ax, cx - 58, box_y, 116, 116, "white", ec=colour, r=22, lw=3.2, z=2)
     lp = _team_logo_path(code)
     if lp is not None:
         crest = _load_team_logo_on_white(lp)
         _image(ax, crest, *_fit(crest, 86, 86, cx, box_y + 58), z=3)
-    _fit_text(ax, cx, 306, name, min(30, 700 / max(len(name), 1)), BARLOW_BOLD, colour,
+    _fit_text(ax, cx, 324, name, min(30, 700 / max(len(name), 1)), BARLOW_BOLD, colour,
               max_w=330, ha="center")
+
+
+def _title_for(round_label: str) -> str:
+    """EuroLeague | Round 4 (the Regular Season prefix is dropped to keep the header light)."""
+    r = (round_label or "").strip()
+    if r.lower().startswith("regular season"):
+        r = r[len("regular season"):].strip()
+    return f"EuroLeague | {r}" if r else "EuroLeague"
 
 
 def _nice_step(span: float) -> int:
@@ -299,21 +307,21 @@ def _render(data: dict, round_label: str = "") -> bytes:
         logo = _load_brand_logo(brand)
         _image(ax, logo, *_fit(logo, 96, 96, 98, 84), z=6)
     _text(ax, 170, 52, "GAME FLOW", 22, BARLOW_BOLD, ORANGE)
-    title = f"EuroLeague {round_label}".strip()
+    title = _title_for(round_label)
     _text(ax, 170, 106, title, min(54, 1700 / max(len(title), 1)), BARLOW_BOLD, NAVY)
     _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
 
     # ── Teams and final score ───────────────────────────────────────────
     _draw_team(ax, 165, hc, hn, COLOR_HOME)
     _draw_team(ax, 835, ac, an, COLOR_AWAY)
-    _text(ax, 478, 226, f"{fh}", 96, BARLOW_BOLD, COLOR_HOME, ha="right")
-    _text(ax, 500, 222, "-", 70, BARLOW_REGULAR, GREY, ha="center")
-    _text(ax, 522, 226, f"{fa}", 96, BARLOW_BOLD, COLOR_AWAY, ha="left")
+    _text(ax, 478, 244, f"{fh}", 96, BARLOW_BOLD, COLOR_HOME, ha="right")
+    _text(ax, 500, 240, "-", 70, BARLOW_REGULAR, GREY, ha="center")
+    _text(ax, 522, 244, f"{fa}", 96, BARLOW_BOLD, COLOR_AWAY, ha="left")
 
     # ── Chart card ──────────────────────────────────────────────────────
-    CARD_Y0, CARD_Y1 = 336, 748
+    CARD_Y0, CARD_Y1 = 356, 748
     PX0, PX1 = 118, 925
-    PY0, PY1 = 388, 706
+    PY0, PY1 = 408, 704
     _rbox(ax, 50, CARD_Y0, 900, CARD_Y1 - CARD_Y0, CARD, ec=RULE, r=18, z=1)
 
     n = len(ds)
