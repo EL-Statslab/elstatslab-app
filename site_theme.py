@@ -193,3 +193,29 @@ def badge_logo_b64(path: str) -> str:
     buf = io.BytesIO()
     canvas.save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
+
+
+@lru_cache(maxsize=8)
+def brand_logo_b64(path: str, max_px: int = 360) -> str:
+    """ELSTATSLAB logo with a real alpha channel, cropped, base64 PNG.
+    A logo saved on an opaque or white rounded background gets its white turned into
+    transparency (ink colour recovered, no halo), so it blends into the paper background."""
+    im = Image.open(Path(path)).convert("RGBA")
+    im.thumbnail((900, 900), Image.LANCZOS)
+    arr = np.asarray(im, dtype=np.float32) / 255.0
+    rgb, alpha = arr[:, :, :3], arr[:, :, 3]
+    # flatten on white, then derive alpha from "how far from white" each pixel is
+    flat = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
+    dist = 1.0 - flat.min(axis=2)
+    a = np.clip((dist - 0.03) / 0.24, 0.0, 1.0)
+    a_safe = np.maximum(a, 1e-3)[:, :, None]
+    ink = np.clip((flat - (1.0 - a_safe)) / a_safe, 0.0, 1.0)
+    out = np.dstack([ink, a])
+    ys, xs = np.where(a > 0.04)
+    if len(xs):
+        out = out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    res = Image.fromarray((out * 255).astype("uint8"), "RGBA")
+    res.thumbnail((max_px, max_px), Image.LANCZOS)
+    buf = io.BytesIO()
+    res.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
