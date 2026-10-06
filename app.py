@@ -78,7 +78,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-from site_theme import apply_theme
+from site_theme import apply_theme, badge_logo_b64  # noqa: E402
 apply_theme()
 
 # =============================================================================
@@ -143,11 +143,11 @@ def logo_path(code: str) -> Path | None:
 
 @st.cache_data(ttl=3600)
 def logo_b64(code: str) -> str | None:
+    """Cropped, square, white background crest (same footprint for every club)."""
     lp = logo_path(code)
     if not lp:
         return None
-    with open(lp, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+    return badge_logo_b64(str(lp))
 
 
 def _autocrop_logo(img_arr):
