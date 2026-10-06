@@ -78,7 +78,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-from site_theme import apply_theme, badge_logo_b64  # noqa: E402
+from site_theme import apply_theme, badge_logo_b64, brand_logo_b64  # noqa: E402
 apply_theme()
 
 # =============================================================================
@@ -2747,7 +2747,11 @@ def main():
     title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
     with title_col1:
         if ELSTATSLAB_LOGO.exists():
-            st.image(str(ELSTATSLAB_LOGO), width=110)
+            st.markdown(
+                f"<img src='data:image/png;base64,{brand_logo_b64(str(ELSTATSLAB_LOGO))}' "
+                f"style='width:110px;height:auto;display:block;background:none;border:0;padding:0;'/>",
+                unsafe_allow_html=True,
+            )
     with title_col2:
         st.title("ELSTATSLAB")
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
