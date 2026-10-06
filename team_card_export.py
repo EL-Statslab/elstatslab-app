@@ -241,16 +241,16 @@ def build_team_card_png(
     # ── Title bar ───────────────────────────────────────────────────────
     brand = _resolve(ELSTATSLAB_LOGO)
     if brand.exists():
-        _image(ax, _load_brand_logo(brand), *_fit(_load_brand_logo(brand), 96, 96, 98, 84), z=6)
-    _text(ax, 170, 54, "TEAM CARD", 17, BARLOW_BOLD, ORANGE)
+        _image(ax, _load_brand_logo(brand), *_fit(_load_brand_logo(brand), 124, 124, 112, 92), z=6)
+    _text(ax, 200, 52, "TEAM CARD", 22, BARLOW_BOLD, ORANGE)
     title = f"EuroLeague {season_label}".strip()
-    _text(ax, 170, 104, title, 54, BARLOW_BOLD, NAVY)
+    _text(ax, 200, 106, title, 54, BARLOW_BOLD, NAVY)
     el = _resolve(EUROLEAGUE_LOGO)
     if euroleague_logo and el.exists():
         el_img = _load_brand_logo(el)
         _image(ax, el_img, *_fit(el_img, 200, 60, W - 150, 70), z=6)
     else:
-        _text(ax, W - 50, 54, "EUROLEAGUE", 16, BARLOW_BOLD, GREY, ha="right")
+        _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
 
     # ── Team hero ───────────────────────────────────────────────────────
     _rbox(ax, 50, HERO_Y, 900, HERO_H, NAVY, r=18)
