@@ -9,6 +9,7 @@ Run locally:
 
 import base64
 import io
+import ipaddress
 import json
 import math
 import sqlite3
@@ -2793,17 +2794,22 @@ _BOT_MARKERS = ("headlesschrome", "playwright", "bot", "crawler", "spider",
 
 
 def _goatcounter_post(code: str, token: str, hit: dict) -> str:
-    try:
-        r = requests.post(
-            f"https://{code}.goatcounter.com/api/v0/count",
-            headers={"Authorization": f"Bearer {token}",
-                     "Content-Type": "application/json"},
-            json={"hits": [hit]},
-            timeout=4,
-        )
-        return f"HTTP {r.status_code} {r.text[:300]}"
-    except Exception as e:
-        return f"Error: {type(e).__name__}: {e}"
+    result = ""
+    for attempt in (1, 2):
+        try:
+            r = requests.post(
+                f"https://{code}.goatcounter.com/api/v0/count",
+                headers={"Authorization": f"Bearer {token}",
+                         "Content-Type": "application/json"},
+                json={"hits": [hit]},
+                timeout=4,
+            )
+            result = f"HTTP {r.status_code} {r.text[:300]} (attempt {attempt})"
+            if r.status_code < 500:
+                return result
+        except Exception as e:
+            result = f"Error: {type(e).__name__}: {e} (attempt {attempt})"
+    return result
 
 
 def track_visit_once() -> None:
@@ -2838,6 +2844,16 @@ def track_visit_once() -> None:
         info["headers"] = f"error: {type(e).__name__}: {e}"
     info["user_agent"] = ua or "(empty)"
     info["ip_seen"] = ip or "(none)"
+
+    # Streamlit Cloud only exposes an internal address (192.168.x.x). Sending it
+    # would make GoatCounter treat visitors with the same browser as one person,
+    # so private addresses are dropped and a random session id is used instead.
+    try:
+        if ip and not ipaddress.ip_address(ip).is_global:
+            info["ip_note"] = "private address ignored, random session id used"
+            ip = ""
+    except ValueError:
+        ip = ""
 
     # Skip the keep-awake workflow and other automated visitors.
     if any(marker in ua.lower() for marker in _BOT_MARKERS):
