@@ -2,7 +2,7 @@
 ELSTATSLAB — Team Cards (module)
 ==================================
 Module importé par app.py sous l'onglet "Team Cards" (st.tabs).
-Grille de logos cliquable des 20 équipes EuroLeague, carte de stats
+Grille de logos cliquable (style papier, aligne sur l'export) des 20 équipes EuroLeague, carte de stats
 per-game + percentiles, filtres Round / journée / glissant N matchs.
 
 Dépend de shared.py (config équipes, logos, connexion DB) présent à la
@@ -31,6 +31,7 @@ from shared import (
     logo_zoom,
     read_sql,
 )
+from site_theme import badge_logo_b64, brand_logo_b64
 from team_card_export import build_team_card_png
 
 STAT_ROWS = [
@@ -52,32 +53,6 @@ STAT_ROWS = [
 ]
 _INVERTED_STATS = {"def_rtg", "tov_pct"}
 
-
-# ============================================================
-# LOGOS (HTML base64 — réutilise logo_b64 mis en cache par shared.py)
-# ============================================================
-def render_logo(code: str, box_size: int, opacity: float = 1.0) -> None:
-    b64 = logo_b64(code)
-    if b64:
-        grayscale = "grayscale(70%)" if opacity < 1.0 else "none"
-        st.markdown(
-            f"""
-            <div style="height:{box_size}px;display:flex;align-items:center;
-                        justify-content:center;overflow:hidden;opacity:{opacity};">
-                <img src="data:image/png;base64,{b64}"
-                     style="max-height:{box_size}px;max-width:{box_size}px;
-                            width:auto;height:auto;object-fit:contain;
-                            filter:{grayscale};" />
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            f"""<div style="height:{box_size}px;display:flex;align-items:center;
-                justify-content:center;font-size:28px;opacity:{opacity};">🏀</div>""",
-            unsafe_allow_html=True,
-        )
 
 
 # ============================================================
@@ -293,34 +268,6 @@ def percentile_color(pct: float) -> tuple[str, str]:
         return "#D9534F", "#FFFFFF"
 
 
-def render_stat_row(label: str, value: float, pct: float, value_fmt: str) -> None:
-    bg, text_color = percentile_color(pct)
-    formatted_value = value_fmt.format(value) if value is not None else "—"
-    st.markdown(
-        f"""
-        <div style="display:flex;align-items:center;padding:7px 0;
-                    border-bottom:1px solid #EDEDED;">
-            <div style="width:120px;font-size:12px;font-weight:700;
-                        color:#8A8A85;letter-spacing:0.5px;">{label}</div>
-            <div style="width:75px;font-size:17px;font-weight:800;
-                        color:#1A1A1A;">{formatted_value}</div>
-            <div style="width:52px;">
-                <span title="Ranked better than {int(pct)}% of the other teams in scope"
-                      style="background:{bg};color:{text_color};
-                            border-radius:10px;padding:2px 9px;
-                            font-size:11px;font-weight:800;cursor:help;">{int(pct)}</span>
-            </div>
-            <div style="flex:1;background:#EEEEEE;border-radius:6px;
-                        height:10px;margin-left:6px;overflow:hidden;">
-                <div style="width:{pct}%;background:{bg};height:10px;
-                            border-radius:6px;"></div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 # ============================================================
 # FILTRES (barre horizontale sous le titre)
 # ============================================================
@@ -428,89 +375,196 @@ def build_team_card_export(row: pd.Series, code: str, disp_name: str, season: in
     )
 
 
+
 # ============================================================
-# RENDER — appelé depuis app.py à l'intérieur d'un onglet
+# LOOK ON SITE (same paper identity as the PNG export)
+# ============================================================
+NAVY, ORANGE, GREY = "#14213D", "#E4572E", "#6B7280"
+
+_TC_CSS = """<style>
+.tc-banner{background:#14213D;border-radius:22px;padding:22px 28px;display:flex;align-items:center;
+ gap:24px;margin:6px 0 16px;}
+.tc-crest{width:104px;height:104px;border-radius:20px;background:#fff;flex:0 0 auto;display:block;}
+.tc-bn{flex:1;min-width:0;}
+.tc-bn .n{font-size:2.6rem;font-weight:700;color:#F3EEE4;line-height:1.05;}
+.tc-bn .s{font-size:1.2rem;color:#B9BFCC;margin-top:6px;}
+.tc-gp{background:#E4572E;color:#fff;font-weight:700;letter-spacing:.06em;font-size:1rem;
+ padding:10px 22px;border-radius:999px;white-space:nowrap;}
+.tc-hl{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;}
+.tc-hlc{background:#FBF8F1;border:2px solid #E1D8C6;border-radius:18px;padding:14px 18px 16px;}
+.tc-hlc .t{font-weight:700;color:#14213D;letter-spacing:.06em;font-size:1rem;display:flex;align-items:center;gap:8px;}
+.tc-hlc .t i{display:inline-block;width:7px;height:18px;border-radius:2px;}
+.tc-hlc .it{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px;}
+.tc-hlc .l{font-size:.9rem;color:#6B7280;font-weight:600;letter-spacing:.04em;}
+.tc-hlc .v{display:flex;align-items:center;justify-content:flex-start;gap:10px;margin-top:2px;
+ font-size:1.55rem;font-weight:700;color:#14213D;}
+.tc-pill{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;
+ border-radius:999px;font-size:.85rem;font-weight:800;padding:0 4px;}
+.tc-hdr,.tc-row{display:grid;grid-template-columns:170px 120px 1fr;align-items:center;}
+.tc-hdr{border-bottom:2px solid #14213D;padding:6px 14px;font-size:.85rem;font-weight:700;
+ letter-spacing:.1em;color:#6B7280;}
+.tc-hdr .sc{display:flex;justify-content:space-between;padding:0 16px;}
+.tc-hdr .sc b{color:#14213D;}
+.tc-row{padding:0 14px;min-height:54px;border-left:6px solid transparent;border-radius:10px;
+ font-variant-numeric:tabular-nums;}
+.tc-row.alt{background:#FBF8F1;}
+.tc-row.st{border-left-color:#1E8449;}
+.tc-row.wk{border-left-color:#D9534F;}
+.tc-row .lb{font-size:1.15rem;font-weight:600;color:#14213D;letter-spacing:.02em;}
+.tc-row .vl{font-size:1.6rem;font-weight:700;color:#14213D;}
+.tc-tr{position:relative;height:54px;}
+.tc-tr::before{content:"";position:absolute;left:50%;top:0;bottom:0;border-left:2px dashed #CFC5B0;}
+.tc-in{position:absolute;left:16px;right:16px;top:0;bottom:0;}
+.tc-bar{position:absolute;left:0;right:0;top:50%;height:5px;margin-top:-2.5px;background:#E8DFCD;border-radius:3px;}
+.tc-fill{position:absolute;left:0;top:50%;height:6px;margin-top:-3px;border-radius:3px;}
+.tc-dot{position:absolute;top:50%;width:32px;height:32px;margin:-16px 0 0 -16px;border-radius:50%;
+ display:flex;align-items:center;justify-content:center;font-size:.95rem;font-weight:800;}
+.tc-note{color:#6B7280;font-size:.95rem;margin:10px 4px 4px;line-height:1.5;}
+.tc-team{background:#fff;border:2px solid #E1D8C6;border-radius:20px;height:128px;display:flex;
+ align-items:center;justify-content:center;margin-bottom:6px;}
+.tc-team img{width:104px;height:104px;border-radius:14px;display:block;}
+.tc-team.off{opacity:.35;filter:grayscale(70%);}
+@media (max-width:760px){
+ .tc-hdr,.tc-row{grid-template-columns:96px 74px 1fr;}
+ .tc-row .lb{font-size:.95rem;} .tc-row .vl{font-size:1.2rem;}
+ .tc-banner{flex-wrap:wrap;padding:16px;} .tc-bn .n{font-size:1.8rem;}
+ .tc-crest{width:76px;height:76px;} .tc-hl{grid-template-columns:1fr;}
+}
+</style>"""
+
+
+def _logo_path(code: str):
+    p = _team_logo_path(code)
+    return str(p) if p else None
+
+
+def _crest_img(code: str, cls: str) -> str:
+    p = _logo_path(code)
+    if not p:
+        return f"<div class='{cls}' style='display:flex;align-items:center;justify-content:center;font-size:2rem;'>🏀</div>"
+    return f"<img class='{cls}' src='data:image/png;base64,{badge_logo_b64(p)}' alt='{code}'/>"
+
+
+def _pill(pct) -> str:
+    bg, fg = percentile_color(pct)
+    return f"<span class='tc-pill' style='background:{bg};color:{fg};'>{int(round(pct))}</span>"
+
+
+def _pick_extremes(rows, k=3, neutral=("PACE",)):
+    """Same rule as the PNG export: strongest above 50, weakest below 50, PACE skipped."""
+    valid = [i for i, r in enumerate(rows) if r[2] is not None and r[0] not in neutral]
+    strong = [i for i in sorted(valid, key=lambda i: (-rows[i][2], i)) if rows[i][2] > 50][:k]
+    weak = [i for i in sorted(valid, key=lambda i: (rows[i][2], i)) if rows[i][2] < 50][:k]
+    return strong, weak
+
+
+def _card_rows(row: pd.Series):
+    rows = []
+    for value_key, label, pct_key, fmt in STAT_ROWS:
+        v, p = row[value_key], row[pct_key]
+        rows.append((label, fmt.format(v) if pd.notna(v) else "n/a",
+                     float(p) if pd.notna(p) else None))
+    return rows
+
+
+def _highlight_html(title: str, color: str, idxs: list, rows: list) -> str:
+    items = ""
+    for i in idxs:
+        label, vtxt, pct = rows[i]
+        items += f"<div><div class='l'>{label}</div><div class='v'><span>{vtxt}</span>{_pill(pct)}</div></div>"
+    if not items:
+        items = "<div class='l'>None</div>"
+    return f"<div class='tc-hlc'><div class='t'><i style='background:{color}'></i>{title}</div><div class='it'>{items}</div></div>"
+
+
+def _team_card_html(disp_name: str, code: str, subtitle: str, gp_text: str | None, rows: list) -> str:
+    strong, weak = _pick_extremes(rows)
+    pill = f"<div class='tc-gp'>{gp_text}</div>" if gp_text else ""
+    html = (
+        f"<div class='tc-banner'>{_crest_img(code, 'tc-crest')}"
+        f"<div class='tc-bn'><div class='n'>{disp_name}</div><div class='s'>{subtitle}</div></div>{pill}</div>"
+        "<div class='tc-hl'>"
+        + _highlight_html("STRONGEST", percentile_color(100)[0], strong, rows)
+        + _highlight_html("WEAKEST", percentile_color(0)[0], weak, rows)
+        + "</div>"
+        "<div class='tc-hdr'><div>METRIC</div><div>VALUE</div>"
+        "<div class='sc'><span>WORST</span><b>LEAGUE MEDIAN</b><span>BEST</span></div></div>"
+    )
+    sset, wset = set(strong), set(weak)
+    for i, (label, vtxt, pct) in enumerate(rows):
+        cls = "tc-row" + (" alt" if i % 2 == 0 else "") + (" st" if i in sset else "") + (" wk" if i in wset else "")
+        if pct is None:
+            track = "<div class='tc-tr'><div class='tc-in'><div class='tc-bar'></div></div></div>"
+        else:
+            p = max(0.0, min(100.0, pct))
+            bg, fg = percentile_color(p)
+            track = (
+                "<div class='tc-tr'><div class='tc-in'><div class='tc-bar'></div>"
+                f"<div class='tc-fill' style='width:{p}%;background:{bg};'></div>"
+                f"<div class='tc-dot' style='left:{p}%;background:{bg};color:{fg};'>{int(round(p))}</div>"
+                "</div></div>"
+            )
+        html += f"<div class='{cls}'><div class='lb'>{label}</div><div class='vl'>{vtxt}</div>{track}</div>"
+    html += (
+        "<div class='tc-note'>Dot = rank out of 100 vs the other teams in scope (100 best, 0 worst). "
+        "PACE: high means fast.<br>Strongest and weakest metrics are marked on the left edge of their rows "
+        "(PACE excluded).</div>"
+    )
+    return html
+
+
+# ============================================================
+# RENDER, called from app.py inside a tab
 # ============================================================
 def render() -> None:
     if "tc_selected_team_code" not in st.session_state:
         st.session_state.tc_selected_team_code = None
 
+    st.markdown(_TC_CSS, unsafe_allow_html=True)
     st.markdown(
-        """
-        <style>
-        [data-testid="column"] button p {
-            font-size: 12px !important;
-            white-space: normal !important;
-            line-height: 1.25 !important;
-            text-align: center !important;
-        }
-        </style>
-        """,
+        """<style>[data-testid="column"] button p{font-size:14px !important;white-space:normal !important;
+        line-height:1.25 !important;text-align:center !important;}</style>""",
         unsafe_allow_html=True,
     )
 
-    title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
-    with title_col1:
-        if ELSTATSLAB_LOGO.exists():
-            st.image(str(ELSTATSLAB_LOGO), width=110)
-    with title_col2:
-        st.title("ELSTATSLAB Team Cards")
-        st.caption("Every EuroLeague team, benchmarked against the rest of the league.")
+    st.caption("Every EuroLeague team, benchmarked against the rest of the league.")
 
     season_col, _ = st.columns([1, 5])
     with season_col:
-        season = st.selectbox(
-            "Season", options=AVAILABLE_SEASONS, index=0, key="tc_season_select",
-        )
+        season = st.selectbox("Season", options=AVAILABLE_SEASONS, index=0, key="tc_season_select")
 
     filter_type, round_code, gameday, n_games = render_filters(season)
 
-    df = load_team_percentiles(
-        season, filter_type,
-        round_code=round_code, gameday=gameday, n_games=n_games,
-    )
-
+    df = load_team_percentiles(season, filter_type, round_code=round_code,
+                               gameday=gameday, n_games=n_games)
     if df.empty:
-        st.error(
-            "No data for this filter. This round may not have started yet, "
-            "or no matchday/game count matches your selection."
-        )
+        st.error("No data for this filter. This round may not have started yet, "
+                 "or no matchday/game count matches your selection.")
         return
 
     qualified_codes = set(df["TeamCode"].tolist())
-
     selected_code = st.session_state.tc_selected_team_code
+
     if selected_code:
         if st.button("← Back to all teams", key="tc_back_btn"):
             st.session_state.tc_selected_team_code = None
             st.rerun()
 
         if selected_code not in qualified_codes:
-            st.warning(
-                f"{TEAM_DISPLAY_NAMES.get(selected_code, selected_code)} did not "
-                f"qualify for this round/filter."
-            )
+            st.warning(f"{TEAM_DISPLAY_NAMES.get(selected_code, selected_code)} did not "
+                       f"qualify for this round/filter.")
             return
 
         row = df[df["TeamCode"] == selected_code].iloc[0]
         disp_name = TEAM_DISPLAY_NAMES.get(selected_code, row["TeamName"])
+        gp = int(row["GP"])
+        subtitle = _png_scope_label(filter_type, round_code, gameday, n_games).replace(" · ", " · ")
+        gp_text = f"{gp} GAME{'S' if gp != 1 else ''} PLAYED" if filter_type == "round" else None
 
-        header_col1, header_col2 = st.columns([1, 4])
-        with header_col1:
-            render_logo(selected_code, box_size=90)
-        with header_col2:
-            st.markdown(f"#### {disp_name}")
-            st.caption(_filter_caption(filter_type, round_code, gameday, n_games, int(row["GP"])))
-            st.caption(
-                "The colored badge is a rank out of 100 vs the other teams in scope, not a "
-                "percentage of the stat. Example: a badge of 74 on OREB% means this team "
-                "rebounds better than about 74% of the other teams (100 = best, 0 = worst)."
-            )
+        st.markdown(_team_card_html(disp_name, selected_code, subtitle, gp_text, _card_rows(row)),
+                    unsafe_allow_html=True)
 
-        for value_key, label, pct_key, fmt in STAT_ROWS:
-            render_stat_row(label, row[value_key], row[pct_key], fmt)
-
-        # ── Export PNG ────────────────────────────────────────────────────
+        # Export PNG
         st.divider()
         scope_key = f"{selected_code}_{season}_{filter_type}_{round_code}_{gameday}_{n_games}"
         png_key = f"tc_png_{scope_key}"
@@ -522,7 +576,6 @@ def render() -> None:
                         filter_type, round_code, gameday, n_games,
                     )
                 st.rerun()
-
         if png_key in st.session_state:
             st.download_button(
                 label="📥 Download Team Card image",
@@ -531,24 +584,20 @@ def render() -> None:
                 mime="image/png",
                 key=f"tc_png_dl_{scope_key}",
             )
-
         return
 
     codes = get_season_team_codes(season)
     n_cols = 4
-    box_size = 90
     for row_start in range(0, len(codes), n_cols):
         cols = st.columns(n_cols)
         for col, code in zip(cols, codes[row_start:row_start + n_cols]):
             with col:
-                is_qualified = code in qualified_codes
-                render_logo(code, box_size, opacity=1.0 if is_qualified else 0.35)
+                ok = code in qualified_codes
+                st.markdown(f"<div class='tc-team{'' if ok else ' off'}'>{_crest_img(code, '')}</div>",
+                            unsafe_allow_html=True)
                 team_name = TEAM_DISPLAY_NAMES.get(code, code)
-                if not is_qualified:
-                    st.button(
-                        team_name, key=f"tc_btn_{code}", use_container_width=True,
-                        disabled=True,
-                    )
+                if not ok:
+                    st.button(team_name, key=f"tc_btn_{code}", use_container_width=True, disabled=True)
                 elif st.button(team_name, key=f"tc_btn_{code}", use_container_width=True):
                     st.session_state.tc_selected_team_code = code
                     st.rerun()
