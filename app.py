@@ -1493,41 +1493,84 @@ def _normalize_radar(value, metric):
 def build_radar_png(home_name: str, away_name: str,
                     h_stats: dict, a_stats: dict,
                     title: str) -> bytes:
+    """Radar in the ELSTATSLAB paper style: home navy, away orange, real values under each axis.
+    Shape size is a fixed scale per metric (DRTG and TOV% flipped), so bigger is always better."""
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.patches import FancyBboxPatch
+
+    NAVY_, ORANGE_, GREY_, RULE_, CARD_ = "#14213D", "#E4572E", "#6B7280", "#E1D8C6", "#FBF8F1"
     labels = METRICS
     n = len(labels)
-    angles = [i * 2 * 3.14159 / n for i in range(n)]
-    angles += angles[:1]
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    ang_c = np.concatenate([angles, angles[:1]])
 
-    h_vals = [_normalize_radar(h_stats.get(m), m) for m in labels]
-    a_vals = [_normalize_radar(a_stats.get(m), m) for m in labels]
-    h_vals += h_vals[:1]
-    a_vals += a_vals[:1]
+    def _vals(stats):
+        v = [_normalize_radar(stats.get(m), m) for m in labels]
+        return np.array(v + v[:1])
 
-    fig, ax = plt.subplots(figsize=(5, 5), dpi=120,
-                           subplot_kw=dict(polar=True),
-                           facecolor=BG_WHITE)
-    ax.set_facecolor(BG_WHITE)
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, size=9, color="#444")
+    h_vals, a_vals = _vals(h_stats), _vals(a_stats)
+
+    fig = Figure(figsize=(6.0, 6.6), dpi=150)
+    FigureCanvasAgg(fig)
+    fig.patch.set_alpha(0.0)
+    card = FancyBboxPatch((0.01, 0.01), 0.98, 0.98, boxstyle="round,pad=0,rounding_size=0.035",
+                          transform=fig.transFigure, facecolor=CARD_, edgecolor=RULE_,
+                          linewidth=1.6, zorder=0)
+    fig.add_artist(card)
+
+    # header: title + team chips
+    fig.text(0.5, 0.945, title.upper(), ha="center", va="center", fontproperties=BARLOW_BOLD,
+             fontsize=19, color=NAVY_)
+    from matplotlib.lines import Line2D
+    for x0, nm, col in ((0.27, home_name, NAVY_), (0.73, away_name, ORANGE_)):
+        fig.add_artist(Line2D([x0 - 0.17], [0.895], marker="o", markersize=10, color=col,
+                              transform=fig.transFigure, linestyle="none"))
+        fig.text(x0 - 0.145, 0.895, nm, ha="left", va="center", fontproperties=BARLOW_SEMIBOLD,
+                 fontsize=14, color=col)
+
+    ax = fig.add_axes([0.20, 0.215, 0.60, 0.60 * 6.0 / 6.6], polar=True)
+    ax.set_facecolor("none")
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)
+    ax.set_ylim(0, 1)
+    ax.set_xticks(angles)
+    ax.set_xticklabels([])
     ax.set_yticks([0.25, 0.5, 0.75, 1.0])
     ax.set_yticklabels([])
-    ax.set_ylim(0, 1)
-    ax.grid(color="#e0e0e0", linewidth=0.8)
-    ax.spines["polar"].set_color("#cccccc")
-    ax.plot(angles, h_vals, color=EL_GREEN, linewidth=2.0, linestyle="-")
-    ax.fill(angles, h_vals, color=EL_GREEN, alpha=0.15)
-    ax.plot(angles, a_vals, color=EL_RED, linewidth=2.0, linestyle="-")
-    ax.fill(angles, a_vals, color=EL_RED, alpha=0.15)
-    ax.set_title(title, size=11, fontweight="bold", pad=18, color="#1a1a1a")
-    fig.text(0.25, 0.02, f"● {home_name}", ha="center", va="bottom",
-             color=EL_GREEN, fontsize=9, fontweight="bold")
-    fig.text(0.75, 0.02, f"● {away_name}", ha="center", va="bottom",
-             color=EL_RED, fontsize=9, fontweight="bold")
+    ax.grid(color=RULE_, linewidth=1.0)
+    ax.spines["polar"].set_color(RULE_)
+    ax.spines["polar"].set_linewidth(1.6)
+    # median ring (50 percent of the scale) dashed
+    ring = np.linspace(0, 2 * np.pi, 200)
+    ax.plot(ring, [0.5] * len(ring), color="#CFC5B0", linewidth=1.2, linestyle=(0, (3, 3)), zorder=1)
+
+    for vals, col in ((a_vals, ORANGE_), (h_vals, NAVY_)):
+        ax.fill(ang_c, vals, color=col, alpha=0.16, zorder=2)
+        ax.plot(ang_c, vals, color=col, linewidth=3.0, solid_joinstyle="round", zorder=3)
+        ax.scatter(ang_c[:-1], vals[:-1], s=46, color=col, edgecolor=CARD_, linewidth=1.4, zorder=4)
+
+    # axis labels with the real values under each name
+    def _fmt(v):
+        return "n/a" if v is None else f"{v:.1f}"
+
+    for ang, m in zip(angles, labels):
+        x, y = np.sin(ang), np.cos(ang)
+        ha = "center" if abs(x) < 0.2 else ("left" if x > 0 else "right")
+        r = 1.17
+        ax.text(ang, r, m, ha=ha, va="center", fontproperties=BARLOW_BOLD, fontsize=15,
+                color=NAVY_, transform=ax.transData)
+        # value line: placed slightly further out on the same ray
+        for dy, st_, col in ((-17, h_stats, NAVY_), (-31, a_stats, ORANGE_)):
+            ax.annotate(_fmt(st_.get(m)), xy=(ang, 1.17), xycoords="data", xytext=(0, dy),
+                        textcoords="offset points", annotation_clip=False, ha=ha, va="center",
+                        fontproperties=BARLOW_SEMIBOLD, fontsize=12.5, color=col)
+
+    fig.text(0.5, 0.04, "Shape size uses a fixed scale per metric. DRTG and TOV% are flipped, so bigger is better.",
+             ha="center", va="center", fontproperties=BARLOW_REGULAR, fontsize=10.5, color=GREY_)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor=BG_WHITE, dpi=120, bbox_inches="tight")
-    plt.close(fig)
-    buf.seek(0)
+    fig.savefig(buf, format="png", dpi=150, transparent=True)
     return buf.getvalue()
 
 
