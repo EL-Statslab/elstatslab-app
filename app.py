@@ -2792,28 +2792,40 @@ _BOT_MARKERS = ("headlesschrome", "playwright", "bot", "crawler", "spider",
                 "python-requests", "curl", "wget")
 
 
-def _goatcounter_post(code: str, token: str, hit: dict) -> None:
+def _goatcounter_post(code: str, token: str, hit: dict) -> str:
     try:
-        requests.post(
+        r = requests.post(
             f"https://{code}.goatcounter.com/api/v0/count",
             headers={"Authorization": f"Bearer {token}",
                      "Content-Type": "application/json"},
             json={"hits": [hit]},
             timeout=4,
         )
-    except Exception:
-        pass
+        return f"HTTP {r.status_code} {r.text[:300]}"
+    except Exception as e:
+        return f"Error: {type(e).__name__}: {e}"
 
 
 def track_visit_once() -> None:
+    """Add ?gcdebug=1 to the site address to see a diagnostic panel at the top
+    of the page. In that mode the hit is sent synchronously and the result is
+    shown. The token is never displayed."""
     if st.session_state.get("_gc_done"):
         return
     st.session_state["_gc_done"] = True
 
+    debug = bool(st.query_params.get("gcdebug"))
+    st.session_state["_gc_debug"] = debug
+    info: dict = {"step": "start"}
+    st.session_state["_gc_info"] = info
+
     try:
         cfg = st.secrets["goatcounter"]
         code, token = cfg["code"], cfg["token"]
-    except Exception:
+        info["secrets"] = f"found (code={code}, token length={len(str(token))})"
+    except Exception as e:
+        info["secrets"] = f"NOT FOUND ({type(e).__name__})"
+        info["step"] = "stopped: no secrets"
         return
 
     ua, ip = "", ""
@@ -2822,11 +2834,14 @@ def track_visit_once() -> None:
         ua = headers.get("User-Agent", "") or ""
         if SEND_VISITOR_IP:
             ip = (headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
-    except Exception:
-        pass
+    except Exception as e:
+        info["headers"] = f"error: {type(e).__name__}: {e}"
+    info["user_agent"] = ua or "(empty)"
+    info["ip_seen"] = ip or "(none)"
 
     # Skip the keep-awake workflow and other automated visitors.
     if any(marker in ua.lower() for marker in _BOT_MARKERS):
+        info["step"] = "stopped: user agent looks like a bot"
         return
 
     hit = {"path": "/", "title": "ELSTATSLAB Match Center"}
@@ -2838,12 +2853,20 @@ def track_visit_once() -> None:
         if ua:
             hit["user_agent"] = ua
 
-    threading.Thread(target=_goatcounter_post, args=(code, token, hit),
-                     daemon=True).start()
+    if debug:
+        info["goatcounter_answer"] = _goatcounter_post(code, token, hit)
+        info["step"] = "sent (synchronous, debug mode)"
+    else:
+        info["step"] = "sent (background)"
+        threading.Thread(target=_goatcounter_post, args=(code, token, hit),
+                         daemon=True).start()
 
 
 def main():
     track_visit_once()
+    if st.session_state.get("_gc_debug"):
+        with st.expander("GoatCounter diagnostic", expanded=True):
+            st.json(st.session_state.get("_gc_info", {}))
     st.markdown(
         """
         <style>
