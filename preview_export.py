@@ -197,6 +197,14 @@ def _fit(img: np.ndarray, box_w: float, box_h: float, cx: float, cy: float):
     return cx - dw / 2, cy - dh / 2, cx + dw / 2, cy + dh / 2
 
 
+def _title_for(round_label: str) -> str:
+    """EuroLeague | Round 4 (the Regular Season prefix is dropped to keep the header light)."""
+    r = (round_label or "").strip()
+    if r.lower().startswith("regular season"):
+        r = r[len("regular season"):].strip()
+    return f"EuroLeague | {r}" if r else "EuroLeague"
+
+
 def _same_stats(a: dict, b: dict) -> bool:
     """True when both sides hold the same figures for every metric."""
     for m in METRICS:
@@ -209,23 +217,23 @@ def _same_stats(a: dict, b: dict) -> bool:
 
 
 def _draw_team(ax, cx, code, name, rank, wl, form, show_record, colour=NAVY):
-    box_y = 158
+    box_y = 180
     _rbox(ax, cx - 62, box_y, 124, 124, "white", ec=colour, r=22, lw=3.2, z=2)
     lp = _team_logo_path(code)
     if lp is not None:
         crest = _load_team_logo_on_white(lp)
         _image(ax, crest, *_fit(crest, 92, 92, cx, box_y + 62), z=3)
     size = min(38, 640 / max(len(name), 1))
-    _text(ax, cx, 328, name, size, BARLOW_BOLD, colour, ha="center")
+    _text(ax, cx, 350, name, size, BARLOW_BOLD, colour, ha="center")
     if show_record:
-        _text(ax, cx, 364, f"#{rank} · {wl}", 26, BARLOW_REGULAR, GREY, ha="center")
+        _text(ax, cx, 386, f"#{rank} · {wl}", 26, BARLOW_REGULAR, GREY, ha="center")
     if form:
         n = len(form)
         sq_w, sq_h, gap = 24, 14, 6
         total = n * sq_w + (n - 1) * gap
         x0 = cx - total / 2
         for i, win in enumerate(reversed(form)):
-            ax.add_patch(Rectangle((x0 + i * (sq_w + gap), 392), sq_w, sq_h,
+            ax.add_patch(Rectangle((x0 + i * (sq_w + gap), 414), sq_w, sq_h,
                                    facecolor=EL_GREEN if win else EL_RED, edgecolor="none", zorder=3))
 
 
@@ -283,7 +291,7 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         logo = _load_brand_logo(brand)
         _image(ax, logo, *_fit(logo, 96, 96, 98, 84), z=6)
     _text(ax, 170, 52, "MATCHUP", 22, BARLOW_BOLD, ORANGE)
-    title = f"EuroLeague {round_label}".strip()
+    title = _title_for(round_label)
     _text(ax, 170, 106, title, min(54, 1700 / max(len(title), 1)), BARLOW_BOLD, NAVY)
     _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
 
@@ -300,12 +308,12 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             hw, aw = series_score["away_wins"], series_score["home_wins"]
         hcol = EL_GREEN if hw > aw else (EL_RED if hw < aw else NAVY)
         acol = EL_GREEN if aw > hw else (EL_RED if aw < hw else NAVY)
-        _text(ax, 500, 196, "SERIES", 22, BARLOW_SEMIBOLD, GREY, ha="center")
-        _text(ax, 430, 262, str(hw), 84, BARLOW_BOLD, hcol, ha="center")
-        _text(ax, 500, 262, "-", 60, BARLOW_REGULAR, "#B5AB98", ha="center")
-        _text(ax, 570, 262, str(aw), 84, BARLOW_BOLD, acol, ha="center")
+        _text(ax, 500, 218, "SERIES", 22, BARLOW_SEMIBOLD, GREY, ha="center")
+        _text(ax, 430, 284, str(hw), 84, BARLOW_BOLD, hcol, ha="center")
+        _text(ax, 500, 284, "-", 60, BARLOW_REGULAR, "#B5AB98", ha="center")
+        _text(ax, 570, 284, str(aw), 84, BARLOW_BOLD, acol, ha="center")
     else:
-        _text(ax, 500, 232, "VS", 84, BARLOW_BOLD, NAVY, ha="center")
+        _text(ax, 500, 254, "VS", 84, BARLOW_BOLD, NAVY, ha="center")
 
     # ── Comparison tables ───────────────────────────────────────────────
     row_h = 56 if show_prediction else 72
