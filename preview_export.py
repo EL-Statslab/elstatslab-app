@@ -208,15 +208,15 @@ def _same_stats(a: dict, b: dict) -> bool:
     return True
 
 
-def _draw_team(ax, cx, code, name, rank, wl, form, show_record):
+def _draw_team(ax, cx, code, name, rank, wl, form, show_record, colour=NAVY):
     box_y = 158
-    _rbox(ax, cx - 62, box_y, 124, 124, "white", ec=RULE, r=22, z=2)
+    _rbox(ax, cx - 62, box_y, 124, 124, "white", ec=colour, r=22, lw=3.2, z=2)
     lp = _team_logo_path(code)
     if lp is not None:
         crest = _load_team_logo_on_white(lp)
         _image(ax, crest, *_fit(crest, 92, 92, cx, box_y + 62), z=3)
     size = min(38, 640 / max(len(name), 1))
-    _text(ax, cx, 328, name, size, BARLOW_BOLD, NAVY, ha="center")
+    _text(ax, cx, 328, name, size, BARLOW_BOLD, colour, ha="center")
     if show_record:
         _text(ax, cx, 364, f"#{rank} · {wl}", 26, BARLOW_REGULAR, GREY, ha="center")
     if form:
@@ -290,8 +290,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     # ── Teams ───────────────────────────────────────────────────────────
     is_post = round_ in ("PO", "FF", "PI")
     lx, rx = 205, 795
-    _draw_team(ax, lx, home_code, home_name, home_rank, home_wl, home_form, not is_post)
-    _draw_team(ax, rx, away_code, away_name, away_rank, away_wl, away_form, not is_post)
+    _draw_team(ax, lx, home_code, home_name, home_rank, home_wl, home_form, not is_post, NAVY)
+    _draw_team(ax, rx, away_code, away_name, away_rank, away_wl, away_form, not is_post, ORANGE)
 
     if is_post and series_score and series_score.get("games_played", 0) > 0:
         if series_score.get("home_code", "").upper() == home_code.upper():
