@@ -9,12 +9,9 @@ Run locally:
 
 import base64
 import io
-import ipaddress
 import json
 import math
 import sqlite3
-import threading
-import uuid
 import zlib
 from pathlib import Path
 from typing import Optional
@@ -24,7 +21,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 from matplotlib.gridspec import GridSpec
 from matplotlib import font_manager
@@ -443,15 +439,54 @@ def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int,
     df = df.reset_index(drop=True)
 
     if official_standings is not None and not official_standings.empty:
+        off = official_standings.copy()
+        off["_code"] = off["team_code"].astype(str).str.strip().str.upper()
+        off = off.drop_duplicates("_code").set_index("_code")
+        n_teams = len(df)
+        matched, unmatched = {}, []
         for i, row in df.iterrows():
-            match = official_standings[
-                official_standings["team_code"].str.upper() == row["team_code"].upper()
-            ]
-            if not match.empty:
-                df.at[i, "rank"] = int(match.iloc[0]["rank"])
-                if "last_5_form" in match.columns:
-                    df.at[i, "last_5_form"] = match.iloc[0]["last_5_form"]
-        df = df.sort_values("rank").reset_index(drop=True)
+            code = str(row["team_code"]).strip().upper()
+            if code in off.index:
+                matched[i] = int(off.at[code, "rank"])
+                if "last_5_form" in off.columns:
+                    df.at[i, "last_5_form"] = off.at[code, "last_5_form"]
+            else:
+                unmatched.append(i)
+        # The official table is a snapshot taken when build_public_db.py last ran. If its W/L
+        # record differs from the games we have for that team in this scope (stale snapshot,
+        # or an older round being viewed), its ranks would not match the displayed record,
+        # so they are ignored and the computed ranking is kept.
+        stale = []
+        if {"wins", "losses"}.issubset(off.columns):
+            for i in matched:
+                code = str(df.at[i, "team_code"]).strip().upper()
+                try:
+                    if (int(off.at[code, "wins"]) != int(df.at[i, "wins"])
+                            or int(off.at[code, "losses"]) != int(df.at[i, "losses"])):
+                        stale.append(code)
+                except (TypeError, ValueError):
+                    continue
+        if stale:
+            print("[standings] standings_official looks out of date (W/L differs for: "
+                  + ", ".join(stale) + "), using computed ranks", flush=True)
+        ranks_ok = (
+            matched
+            and not stale
+            and len(set(matched.values())) == len(matched)
+            and all(1 <= r <= n_teams for r in matched.values())
+        )
+        if ranks_ok:
+            # teams missing from standings_official get the leftover ranks (in computed order),
+            # so the ranking is always a clean 1..N list and never mixes two sources
+            free = [r for r in range(1, n_teams + 1) if r not in set(matched.values())]
+            for i, r in matched.items():
+                df.at[i, "rank"] = r
+            for i, r in zip(unmatched, free):
+                df.at[i, "rank"] = r
+            if unmatched:
+                print("[standings] no standings_official row for: "
+                      + ", ".join(str(df.at[i, "team_code"]) for i in unmatched), flush=True)
+            df = df.sort_values("rank").reset_index(drop=True)
 
     return df
 
@@ -2778,122 +2813,7 @@ def render_methodology():
     _methodology_shot_maps()
 
 
-# =============================================================================
-# VISITOR TRACKING (GoatCounter, sent from the server)
-# =============================================================================
-# One hit per browser session, sent from Python so no script has to run in the
-# visitor's browser. The token is read from the Streamlit Secrets:
-#     [goatcounter]
-#     code = "elstatslab"
-#     token = "..."
-# If the secrets are missing or GoatCounter does not answer, the app simply
-# carries on without tracking.
-SEND_VISITOR_IP = True   # lets GoatCounter work out the country; it does not store the IP
-_BOT_MARKERS = ("headlesschrome", "playwright", "bot", "crawler", "spider",
-                "python-requests", "curl", "wget")
-
-
-def _goatcounter_post(code: str, token: str, hit: dict) -> str:
-    result = ""
-    for attempt in (1, 2):
-        try:
-            r = requests.post(
-                f"https://{code}.goatcounter.com/api/v0/count",
-                headers={"Authorization": f"Bearer {token}",
-                         "Content-Type": "application/json"},
-                json={"hits": [hit]},
-                timeout=4,
-            )
-            result = f"HTTP {r.status_code} {r.text[:300]} (attempt {attempt})"
-            if r.status_code < 500:
-                return result
-        except Exception as e:
-            result = f"Error: {type(e).__name__}: {e} (attempt {attempt})"
-    return result
-
-
-def track_visit_once() -> None:
-    """Add ?gcdebug=1 to the site address to see a diagnostic panel at the top
-    of the page. In that mode the hit is sent synchronously and the result is
-    shown. The token is never displayed."""
-    if st.session_state.get("_gc_done"):
-        return
-    st.session_state["_gc_done"] = True
-
-    debug = bool(st.query_params.get("gcdebug"))
-    st.session_state["_gc_debug"] = debug
-    info: dict = {"step": "start"}
-    st.session_state["_gc_info"] = info
-
-    # Owner switch. A visit whose address ends with ?me=1 is not counted.
-    # Streamlit Cloud does not pass browser cookies to the app, so this has to
-    # be in the address each time: use a bookmark that includes ?me=1.
-    if st.query_params.get("me") == "1":
-        info["step"] = "stopped: owner visit (?me=1)"
-        try:
-            st.toast("This visit is not counted.")
-        except Exception:
-            pass
-        return
-
-    try:
-        cfg = st.secrets["goatcounter"]
-        code, token = cfg["code"], cfg["token"]
-        info["secrets"] = f"found (code={code}, token length={len(str(token))})"
-    except Exception as e:
-        info["secrets"] = f"NOT FOUND ({type(e).__name__})"
-        info["step"] = "stopped: no secrets"
-        return
-
-    ua, ip = "", ""
-    try:
-        headers = st.context.headers
-        ua = headers.get("User-Agent", "") or ""
-        if SEND_VISITOR_IP:
-            ip = (headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
-    except Exception as e:
-        info["headers"] = f"error: {type(e).__name__}: {e}"
-    info["user_agent"] = ua or "(empty)"
-    info["ip_seen"] = ip or "(none)"
-
-    # Streamlit Cloud only exposes an internal address (192.168.x.x). Sending it
-    # would make GoatCounter treat visitors with the same browser as one person,
-    # so private addresses are dropped and a random session id is used instead.
-    try:
-        if ip and not ipaddress.ip_address(ip).is_global:
-            info["ip_note"] = "private address ignored, random session id used"
-            ip = ""
-    except ValueError:
-        ip = ""
-
-    # Skip the keep-awake workflow and other automated visitors.
-    if any(marker in ua.lower() for marker in _BOT_MARKERS):
-        info["step"] = "stopped: user agent looks like a bot"
-        return
-
-    hit = {"path": "/", "title": "ELSTATSLAB Match Center"}
-    if ua and ip:
-        hit["user_agent"] = ua
-        hit["ip"] = ip
-    else:
-        hit["session"] = uuid.uuid4().hex
-        if ua:
-            hit["user_agent"] = ua
-
-    if debug:
-        info["goatcounter_answer"] = _goatcounter_post(code, token, hit)
-        info["step"] = "sent (synchronous, debug mode)"
-    else:
-        info["step"] = "sent (background)"
-        threading.Thread(target=_goatcounter_post, args=(code, token, hit),
-                         daemon=True).start()
-
-
 def main():
-    track_visit_once()
-    if st.session_state.get("_gc_debug"):
-        with st.expander("GoatCounter diagnostic", expanded=True):
-            st.json(st.session_state.get("_gc_info", {}))
     st.markdown(
         """
         <style>
