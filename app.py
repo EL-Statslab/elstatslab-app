@@ -49,6 +49,10 @@ ELSTATSLAB_LOGO = LOGOS_DIR / "logo.png"
 EUROLEAGUE_LOGO = LOGOS_DIR / "EL.png"
 CURRENT_SEASON = 2025
 ROLLING_WINDOW = 5
+# Last 5 gauges (inside the Season table) appear from this regular season round
+LAST5_MIN_ROUND = 13
+# Gauges only draw a coloured line when the gap reaches this share of the metric scale
+LAST5_MIN_GAP = 0.30
 
 # Interrupteurs des Shot Maps : mettre False pour les desactiver sans retirer le code.
 SHOTMAPS_IN_MATCH = True    # bloc "Shot Map" sous Impact Pulse dans un match
@@ -1279,6 +1283,101 @@ def render_comparison_styled(label: str, home: str, away: str,
     st.markdown(table_html, unsafe_allow_html=True)
 
 
+def render_comparison_form(home: str, away: str,
+                           h_stats: dict, a_stats: dict,
+                           h_recent: dict, a_recent: dict):
+    """Season table where each cell carries a small gauge: dot = season value,
+    line end = Last 5 value (green better, red worse). The Last 5 number sits
+    next to the gauge, never on top of the line."""
+    if not h_stats or not a_stats:
+        st.info("Not enough games yet for this scope.")
+        return
+
+    def bg(intensity):
+        if intensity >= 0:
+            return f"rgba(46, 160, 67, {min(0.55, intensity * 0.6):.3f})"
+        return f"rgba(218, 54, 51, {min(0.55, -intensity * 0.6):.3f})"
+
+    def gauge(metric, season_v, l5_v):
+        if season_v is None or l5_v is None:
+            return ""
+        d = float(l5_v) - float(season_v)
+        better = (d < 0) if metric in LOWER_IS_BETTER else (d > 0)
+        col = "#2ea043" if better else "#da3633"
+        norm = max(-1.0, min(1.0, d / METRIC_SCALE.get(metric, 5.0)))
+        end = 50 + norm * 42
+        lo, hi = min(50, end), max(50, end)
+        parts = ("<div style='position:relative;flex:1;height:16px;'>"
+                 "<div style='position:absolute;left:8%;right:8%;top:7px;height:2px;"
+                 "background:rgba(20,33,61,0.18);border-radius:2px;'></div>")
+        if abs(d) >= LAST5_MIN_GAP * METRIC_SCALE.get(metric, 5.0):
+            parts += (f"<div style='position:absolute;left:{lo:.1f}%;width:{hi - lo:.1f}%;"
+                      f"top:6px;height:4px;background:{col};border-radius:2px;'></div>"
+                      f"<div style='position:absolute;left:calc({end:.1f}% - 6px);top:2px;"
+                      f"width:12px;height:12px;border-radius:50%;background:{col};"
+                      f"border:2px solid #F3EEE4;box-sizing:border-box;'></div>")
+        parts += ("<div style='position:absolute;left:calc(50% - 4px);top:4px;width:8px;"
+                  "height:8px;border-radius:50%;background:#14213D;'></div></div>")
+        return (f"<div style='display:flex;align-items:center;gap:8px;margin-top:2px;'>"
+                f"{parts}<div style='width:46px;text-align:right;font-size:0.8rem;"
+                f"color:#6B7280;font-weight:600;'>{float(l5_v):.1f}</div></div>")
+
+    def legend_item(kind, col, text):
+        if kind == "dot":
+            glyph = (f"<span style='display:inline-block;width:11px;height:11px;border-radius:50%;"
+                     f"background:{col};margin-right:8px;vertical-align:middle;'></span>")
+        else:
+            glyph = (f"<span style='display:inline-block;width:20px;height:4px;background:{col};"
+                     f"border-radius:2px;margin-right:2px;vertical-align:middle;'></span>"
+                     f"<span style='display:inline-block;width:13px;height:13px;border-radius:50%;"
+                     f"background:{col};margin-right:8px;vertical-align:middle;'></span>")
+        return f"<span style='margin:0 14px;white-space:nowrap;'>{glyph}{text}</span>"
+
+    legend = ("<div style='text-align:center;font-size:1.1rem;color:#6B7280;margin:2px 0 12px 0;'>"
+              + legend_item("dot", "#14213D", "Season")
+              + legend_item("end", "#2ea043", "Last 5 better")
+              + legend_item("end", "#da3633", "Last 5 worse")
+              + "</div>")
+
+    rows_html = ""
+    for m in METRICS:
+        hv, av = h_stats.get(m), a_stats.get(m)
+        h_int, a_int = colour_intensity(hv, av, m)
+        hv_s = f"{hv:.1f}" if hv is not None else "-"
+        av_s = f"{av:.1f}" if av is not None else "-"
+        cell = ("padding:8px 12px 7px 12px;border-bottom:1px solid #F3EEE4;"
+                "color:#14213D;")
+        rows_html += (
+            "<tr>"
+            f"<td style='background:{bg(h_int)};{cell}'>"
+            f"<div style='text-align:center;font-weight:700;font-size:1.2rem;line-height:1.2;'>{hv_s}</div>"
+            f"{gauge(m, hv, (h_recent or {}).get(m))}</td>"
+            f"<td style='background:#FBF8F1;padding:8px 6px;text-align:center;color:#14213D;"
+            f"font-weight:600;border-bottom:1px solid #E1D8C6;'>{m}</td>"
+            f"<td style='background:{bg(a_int)};{cell}'>"
+            f"<div style='text-align:center;font-weight:700;font-size:1.2rem;line-height:1.2;'>{av_s}</div>"
+            f"{gauge(m, av, (a_recent or {}).get(m))}</td>"
+            "</tr>"
+        )
+
+    th = ("padding:8px 4px;text-align:center;color:#6B7280;font-size:0.85rem;font-weight:600;"
+          "border-bottom:2px solid #14213D;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;")
+    table_html = (
+        "<div style='width:100%;max-width:820px;margin:0 auto;overflow-x:auto;'>"
+        "<div style='text-align:center;font-weight:700;font-size:1.15rem;color:#14213D;"
+        "margin-bottom:4px;'>Season</div>"
+        f"{legend}"
+        "<table style='width:100%;border-collapse:collapse;table-layout:fixed;font-size:0.9rem;'>"
+        "<thead><tr>"
+        f"<th style='{th}width:37%;'>{home}</th>"
+        f"<th style='{th}width:26%;'></th>"
+        f"<th style='{th}width:37%;'>{away}</th>"
+        "</tr></thead>"
+        f"<tbody>{rows_html}</tbody></table></div>"
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
+
+
 def render_team_header(code: str, disp_name: str,
                        standings_row: dict | None,
                        form_seq: list[bool],
@@ -1960,37 +2059,44 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             st.caption("Copy this link to share this match:")
             st.code(share_url, language=None)
 
-    col1, col2 = st.columns(2)
-    if use_radar:
-        if played:
-            h_game = team_single_game_stats(all_games, home, int(rnd))
-            a_game = team_single_game_stats(all_games, away, int(rnd))
-            right_label_str = "This Game"
-            right_h, right_a = h_game, a_game
-        else:
-            right_label_str = f"Last {ROLLING_WINDOW}"
-            right_h, right_a = h_recent, a_recent
-        with col1:
-            radar_png = build_radar_png(home_disp, away_disp, h_season, a_season, "Season")
-            st.image(radar_png, use_container_width=True)
-        with col2:
-            radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a,
-                                         right_label_str)
-            st.image(radar_png2, use_container_width=True)
+    use_form = (not played and phase == "RS" and int(rnd) >= LAST5_MIN_ROUND
+                and bool(h_recent) and bool(a_recent))
+
+    if use_form and not use_radar:
+        render_comparison_form(home_disp, away_disp, h_season, a_season,
+                               h_recent, a_recent)
     else:
-        with col1:
-            render_comparison_styled("Season", home_disp, away_disp,
-                                     h_season, a_season)
-        with col2:
+        col1, col2 = st.columns(2)
+        if use_radar:
             if played:
                 h_game = team_single_game_stats(all_games, home, int(rnd))
                 a_game = team_single_game_stats(all_games, away, int(rnd))
-                render_comparison_styled("This Game", home_disp, away_disp,
-                                         h_game, a_game)
+                right_label_str = "This Game"
+                right_h, right_a = h_game, a_game
             else:
-                render_comparison_styled(f"Last {ROLLING_WINDOW}",
-                                         home_disp, away_disp,
-                                         h_recent, a_recent)
+                right_label_str = f"Last {ROLLING_WINDOW}"
+                right_h, right_a = h_recent, a_recent
+            with col1:
+                radar_png = build_radar_png(home_disp, away_disp, h_season, a_season, "Season")
+                st.image(radar_png, use_container_width=True)
+            with col2:
+                radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a,
+                                             right_label_str)
+                st.image(radar_png2, use_container_width=True)
+        else:
+            with col1:
+                render_comparison_styled("Season", home_disp, away_disp,
+                                         h_season, a_season)
+            with col2:
+                if played:
+                    h_game = team_single_game_stats(all_games, home, int(rnd))
+                    a_game = team_single_game_stats(all_games, away, int(rnd))
+                    render_comparison_styled("This Game", home_disp, away_disp,
+                                             h_game, a_game)
+                else:
+                    render_comparison_styled(f"Last {ROLLING_WINDOW}",
+                                             home_disp, away_disp,
+                                             h_recent, a_recent)
 
     # ── Gameflow ──────────────────────────────────────────────────────────
     if played:
@@ -2085,6 +2191,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     right_label=right_lbl,
                     round_=phase,
                     series_score=series,
+                    form_gauges=use_form,
                 )
             st.rerun()
 
