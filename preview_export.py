@@ -5,7 +5,8 @@ New ELSTATSLAB look: warm paper background, deep navy, orange accent, Barlow
 Condensed. The comparison cells keep the website gradient (green better, red
 worse, intensity from colour_intensity), so the PNG always matches the site.
 
-Drop in replacement for build_preview_png in app.py, same arguments:
+Drop in replacement for build_preview_png in app.py, same arguments plus the
+optional form_gauges flag (Last 5 gauges inside the Season table):
 
     from preview_export import build_preview_png
 
@@ -20,7 +21,8 @@ from typing import Optional
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import font_manager
-from matplotlib.patches import FancyBboxPatch, Rectangle
+from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
+from matplotlib.textpath import TextPath
 from PIL import Image
 
 # =============================================================================
@@ -47,6 +49,9 @@ METRIC_SCALE = {
     "eFG%": 4.0, "TOV%": 2.5,
 }
 LOWER_IS_BETTER = {"DRTG", "TOV%"}
+# Last 5 gauges: the coloured line only shows when the gap reaches this share of the
+# metric scale (small gaps stay as a single dot, which keeps the visual calm)
+LAST5_MIN_GAP = 0.30
 
 # Website data colours (form squares, series score, comparison cells)
 EL_GREEN = "#2ea043"
@@ -264,6 +269,77 @@ def _draw_table(ax, x0, width, title, h_stats, a_stats, home_label, away_label, 
             ax.plot([xm + 14, xm + mid_w - 14], [y + cell_h + 4] * 2, color=RULE, lw=1, zorder=1)
 
 
+def _text_w(s: str, size: float, fp) -> float:
+    """Rendered width of a string in design units (no renderer needed)."""
+    try:
+        return TextPath((0, 0), s, size=size * PT, prop=fp).get_extents().width / PT
+    except Exception:
+        return len(s) * size * 0.45
+
+
+def _draw_form_legend(ax, cx, y, size=24):
+    """Legend of the Last 5 gauges: season dot, green end (better), red end (worse)."""
+    items = [("dot", NAVY, "Season"), ("end", EL_GREEN, "Last 5 better"), ("end", EL_RED, "Last 5 worse")]
+    glyph_w, pad, gap = 30, 10, 44
+    widths = [glyph_w + pad + _text_w(t, size, BARLOW_REGULAR) for _, _, t in items]
+    x = cx - (sum(widths) + gap * (len(items) - 1)) / 2
+    for (kind, col, label), w in zip(items, widths):
+        if kind == "dot":
+            ax.add_patch(Circle((x + glyph_w - 8, y), 6, facecolor=col, edgecolor="none", zorder=6))
+        else:
+            ax.plot([x, x + glyph_w - 8], [y, y], color=col, lw=4.2, zorder=5, solid_capstyle="round")
+            ax.add_patch(Circle((x + glyph_w - 8, y), 8, facecolor=col, edgecolor="white", linewidth=1.6, zorder=6))
+        _text(ax, x + glyph_w + pad, y, label, size, BARLOW_REGULAR, GREY)
+        x += w + gap
+
+
+def _draw_table_form(ax, x0, width, title, h_stats, a_stats, h_recent, a_recent,
+                     home_label, away_label, y0, row_h):
+    """Season table where every cell carries a small gauge: dot = season value,
+    line end = Last 5 value, green when the Last 5 is better, red when worse."""
+    cell_w = (width - 10) * 0.34
+    mid_w = width - 2 * cell_w - 12
+    xh = x0
+    xm = x0 + cell_w + 6
+    xa = xm + mid_w + 6
+    _text(ax, x0 + width / 2, y0 - 90, title, 30, BARLOW_BOLD, NAVY, ha="center")
+    _draw_form_legend(ax, x0 + width / 2, y0 - 56, size=24)
+    size = max(11, min(22, cell_w * 2.2 / max(len(home_label), len(away_label), 1)))
+    for cx, lab in ((xh + cell_w / 2, home_label), (xa + cell_w / 2, away_label)):
+        _text(ax, cx, y0 - 22, lab, size, BARLOW_SEMIBOLD, GREY, ha="center")
+    ax.plot([x0, x0 + width], [y0 - 8, y0 - 8], color=NAVY, lw=1.6, zorder=2)
+
+    for i, m in enumerate(METRICS):
+        y = y0 + i * row_h
+        hv, av = h_stats.get(m), a_stats.get(m)
+        h_int, a_int = colour_intensity(hv, av, m)
+        cell_h = row_h - 8
+        for val, inten, cx0, recent in ((hv, h_int, xh, h_recent), (av, a_int, xa, a_recent)):
+            _rbox(ax, cx0, y, cell_w, cell_h, cell_colour(inten), r=10, z=2)
+            txt = f"{val:.1f}" if val is not None else "n/a"
+            _text(ax, cx0 + cell_w / 2, y + cell_h / 2 - 9, txt, 30, BARLOW_BOLD, NAVY, ha="center")
+            l5 = (recent or {}).get(m)
+            if val is None or l5 is None:
+                continue
+            gx0, gx1 = cx0 + cell_w * 0.15, cx0 + cell_w * 0.85
+            gy = y + cell_h - 8
+            mid, half = (gx0 + gx1) / 2, (gx1 - gx0) / 2
+            ax.plot([gx0, gx1], [gy, gy], color=NAVY, alpha=0.22, lw=2.6, zorder=3, solid_capstyle="round")
+            d = float(l5) - float(val)
+            if abs(d) >= LAST5_MIN_GAP * METRIC_SCALE.get(m, 5.0):
+                good = (d < 0) if m in LOWER_IS_BETTER else (d > 0)
+                col = EL_GREEN if good else EL_RED
+                off = max(-1.0, min(1.0, d / METRIC_SCALE.get(m, 5.0))) * half
+                # white halo under the coloured line so it stays readable on any cell colour
+                ax.plot([mid, mid + off], [gy, gy], color="white", lw=6.6, zorder=4, solid_capstyle="round")
+                ax.plot([mid, mid + off], [gy, gy], color=col, lw=4.2, zorder=4.5, solid_capstyle="round")
+                ax.add_patch(Circle((mid + off, gy), 6.8, facecolor=col, edgecolor="white", linewidth=2, zorder=6))
+            ax.add_patch(Circle((mid, gy), 4.6, facecolor=NAVY, edgecolor="white", linewidth=1.4, zorder=7))
+        _text(ax, xm + mid_w / 2, y + cell_h / 2 + 1, m, 28, BARLOW_SEMIBOLD, NAVY, ha="center")
+        if i < len(METRICS) - 1:
+            ax.plot([xm + 14, xm + mid_w - 14], [y + cell_h + 4] * 2, color=RULE, lw=1, zorder=1)
+
+
 # =============================================================================
 # MAIN EXPORT
 # =============================================================================
@@ -278,7 +354,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       show_prediction: bool = True,
                       right_label: str = "Last 5",
                       round_: str = "RS",
-                      series_score: dict = None) -> bytes:
+                      series_score: dict = None,
+                      form_gauges: bool = False) -> bytes:
     fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, facecolor=PAPER)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
@@ -316,14 +393,20 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         _text(ax, 500, 254, "VS", 84, BARLOW_BOLD, NAVY, ha="center")
 
     # ── Comparison tables ───────────────────────────────────────────────
+    use_gauges = bool(form_gauges) and bool(h_right) and bool(a_right)
     row_h = 56 if show_prediction else 72
     y0 = 536
-    single = _same_stats(h_season, h_right) and _same_stats(a_season, a_right)
-    if single:
-        _draw_table(ax, 120, 760, "Season", h_season, a_season, home_name, away_name, y0, row_h)
+    if use_gauges:
+        row_h, y0 = 52, 560
+        _draw_table_form(ax, 120, 760, "Season", h_season, a_season, h_right, a_right,
+                         home_name, away_name, y0, row_h)
     else:
-        _draw_table(ax, 50, 430, "Season", h_season, a_season, home_name, away_name, y0, row_h)
-        _draw_table(ax, 520, 430, right_label, h_right, a_right, home_name, away_name, y0, row_h)
+        single = _same_stats(h_season, h_right) and _same_stats(a_season, a_right)
+        if single:
+            _draw_table(ax, 120, 760, "Season", h_season, a_season, home_name, away_name, y0, row_h)
+        else:
+            _draw_table(ax, 50, 430, "Season", h_season, a_season, home_name, away_name, y0, row_h)
+            _draw_table(ax, 520, 430, right_label, h_right, a_right, home_name, away_name, y0, row_h)
 
     # ── Win probability ─────────────────────────────────────────────────
     if show_prediction:
