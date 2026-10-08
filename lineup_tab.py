@@ -1,17 +1,21 @@
 """
-ELSTATSLAB Lineup tab (v1, five man units).
+ELSTATSLAB Lineup tab (v2: five man units, trios, duos, duo matrix).
 
 Reads lineup_stints from euroleague_public.db (built by build_lineups.py,
-copied by build_public_db.py). Shows the best and worst five man unit of a
-team by NetRtg, a sortable table of every qualifying unit, and a PNG export.
+copied by build_public_db.py). Shows the best and worst unit of a team by
+NetRtg, a sortable table of every qualifying unit, a duo matrix, and a PNG
+export. Trios and duos are built from the five man units: every unit on the
+floor contains 10 duos and 10 trios, so their minutes and points add up.
 
 Needs lineup_export.py in the same folder.
 """
 
 import json
 import math
+from itertools import combinations
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from matplotlib.colors import LinearSegmentedColormap
@@ -19,9 +23,13 @@ from matplotlib.colors import LinearSegmentedColormap
 from lineup_export import build_lineup_png
 
 # Thresholds, adjust here
-MIN_MINUTES_DEFAULT = 5.0   # season and rounds scopes (slider default)
+MIN_MINUTES_DEFAULT = 5.0   # season and rounds scopes (slider default, five man units)
 MIN_MINUTES_MATCH = 3.0     # single match, same as the Game Flow Best 5
 MIN_POSS_EACH = 10.0        # minimum possessions on each side (season and rounds)
+# Trios and duos play much longer together: default minutes = minutes per game
+# of the scope times the number of games, never below the base above.
+MIN_PER_GAME = {5: 0.0, 3: 3.0, 2: 5.0}
+MATRIX_PLAYERS = 10         # players shown in the duo matrix (most minutes)
 
 NAVY = "#14213D"
 ORANGE = "#E4572E"
@@ -29,6 +37,13 @@ POS_TXT = "#1E7A37"
 NEG_TXT = "#B02A28"
 
 _CMAP = LinearSegmentedColormap.from_list("lu_net", ["#F2B8B5", "#FBF8F1", "#B7E1BF"])
+
+UNITS = {"5 man": 5, "Trio": 3, "Duo": 2}
+LABELS = {
+    5: {"best": "BEST 5", "worst": "WORST 5", "plural": "five man units", "title": "5"},
+    3: {"best": "BEST TRIO", "worst": "WORST TRIO", "plural": "trios", "title": "TRIO"},
+    2: {"best": "BEST DUO", "worst": "WORST DUO", "plural": "duos", "title": "DUO"},
+}
 
 _CSS = """
 <style>
@@ -41,6 +56,23 @@ _CSS = """
 .lu-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px;padding-top:10px;border-top:2px solid #14213D;}
 .lu-sk{font-size:.8rem;font-weight:700;letter-spacing:.12em;color:#6B7280;}
 .lu-sv{font-size:1.4rem;font-weight:700;color:#14213D;}
+.lu-li{display:flex;align-items:center;gap:12px;background:#FBF8F1;border:1px solid #E1D8C6;border-radius:14px;padding:10px 12px;margin-bottom:8px;}
+.lu-rk{font-size:.9rem;font-weight:700;color:#6B7280;min-width:1.6rem;text-align:center;}
+.lu-bd{flex:1;min-width:0;}
+.lu-pl{font-size:1rem;font-weight:700;color:#14213D;line-height:1.25;overflow-wrap:anywhere;}
+.lu-ms{font-size:.8rem;font-weight:600;color:#6B7280;margin-top:3px;letter-spacing:.02em;}
+.lu-nb{min-width:4.2rem;text-align:center;border-radius:10px;padding:6px 4px;}
+.lu-nv{font-size:1.45rem;font-weight:700;line-height:1;}
+.lu-nl{font-size:.65rem;font-weight:700;letter-spacing:.1em;color:#6B7280;margin-top:2px;}
+/* Desktop shows the sortable table, phones show the compact list */
+@media (min-width: 641px){ .st-key-lu_list{display:none !important;} }
+@media (max-width: 640px){
+  .st-key-lu_tbl{display:none !important;}
+  .lu-card{padding:14px 16px 16px 16px;margin-bottom:10px;}
+  .lu-net{font-size:3.4rem;}
+  .lu-p{font-size:1.1rem;}
+  .lu-sv{font-size:1.15rem;}
+}
 </style>
 """
 
@@ -63,6 +95,12 @@ def _pretty_name(raw: str) -> str:
             parts.append(p)
         out.append("-".join(parts))
     return " ".join(out)
+
+
+def _short_name(raw: str) -> str:
+    pretty = _pretty_name(raw)
+    parts = pretty.split(" ", 1)
+    return parts[1] if len(parts) == 2 else pretty
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -103,19 +141,60 @@ def _match_labels(conn, season, games, name_fn) -> dict:
     return labels
 
 
-def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    g = (df.groupby(["player_ids", "player_names"], as_index=False)
-           .agg(gp=("gamecode", "nunique"), sec=("sec", "sum"),
-                pf=("pts_for", "sum"), pa=("pts_against", "sum"),
-                poff=("poss_off", "sum"), pdef=("poss_def", "sum")))
+def _finish(g: pd.DataFrame) -> pd.DataFrame:
+    """Adds minutes, ORTG, DRTG and NetRtg to an aggregated table."""
+    if g.empty:
+        return g
+    g = g.copy()
     g["minutes"] = g["sec"] / 60.0
     g = g[(g["poff"] > 0) & (g["pdef"] > 0)].copy()
     g["ortg"] = 100.0 * g["pf"] / g["poff"]
     g["drtg"] = 100.0 * g["pa"] / g["pdef"]
     g["netrtg"] = g["ortg"] - g["drtg"]
     return g.reset_index(drop=True)
+
+
+def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
+    """Five man units, cumulated over the games of the selection."""
+    if df.empty:
+        return df
+    g = (df.groupby(["player_ids", "player_names"], as_index=False)
+           .agg(gp=("gamecode", "nunique"), sec=("sec", "sum"),
+                pf=("pts_for", "sum"), pa=("pts_against", "sum"),
+                poff=("poss_off", "sum"), pdef=("poss_def", "sum")))
+    return _finish(g)
+
+
+def _combo_table(df: pd.DataFrame, k: int) -> pd.DataFrame:
+    """
+    Groups of k players (1, 2 or 3), from the five man units. Each unit on the
+    floor contributes its seconds, points and possessions to every group of k
+    players it contains. Player ids are sorted so a group has a single key.
+    """
+    acc = {}
+    for r in df.itertuples(index=False):
+        ids = str(r.player_ids).split("|")
+        names = str(r.player_names).split("|")
+        if len(ids) != 5 or len(names) != 5:
+            continue
+        pairs = sorted(zip(ids, names))
+        for combo in combinations(pairs, k):
+            key = tuple(c[0] for c in combo)
+            a = acc.get(key)
+            if a is None:
+                a = acc[key] = {"names": [c[1] for c in combo], "games": set(),
+                                "sec": 0.0, "pf": 0.0, "pa": 0.0, "poff": 0.0, "pdef": 0.0}
+            a["games"].add(r.gamecode)
+            a["sec"] += float(r.sec)
+            a["pf"] += float(r.pts_for)
+            a["pa"] += float(r.pts_against)
+            a["poff"] += float(r.poss_off)
+            a["pdef"] += float(r.poss_def)
+    rows = [{"player_ids": "|".join(key), "player_names": "|".join(a["names"]),
+             "gp": len(a["games"]), "sec": a["sec"], "pf": a["pf"], "pa": a["pa"],
+             "poff": a["poff"], "pdef": a["pdef"]} for key, a in acc.items()]
+    return pd.DataFrame(rows, columns=["player_ids", "player_names", "gp", "sec",
+                                       "pf", "pa", "poff", "pdef"])
 
 
 def _row(r) -> dict:
@@ -147,18 +226,72 @@ def _card_html(kicker: str, accent: str, r: dict) -> str:
             f"{players}<div class='lu-stats'>{stats}</div></div>")
 
 
-def _show_df(obj, n_rows: int):
+def _list_html(fs: pd.DataFrame) -> str:
+    """Compact list for phones: surnames on top, small stats line, NetRtg badge."""
+    out = []
+    for i, r in enumerate(fs.itertuples(index=False), start=1):
+        names = ", ".join(_short_name(p) for p in str(r.player_names).split("|"))
+        net = float(r.netrtg)
+        col = POS_TXT if net >= 0 else NEG_TXT
+        bg = "#DDF0E1" if net >= 0 else "#F8DCDA"
+        out.append(
+            "<div class='lu-li'>"
+            f"<div class='lu-rk'>{i}</div>"
+            f"<div class='lu-bd'><div class='lu-pl'>{names}</div>"
+            f"<div class='lu-ms'>{r.minutes:.1f} MIN &middot; ORTG {r.ortg:.1f} &middot; "
+            f"DRTG {r.drtg:.1f} &middot; {int(r.gp)} GP</div></div>"
+            f"<div class='lu-nb' style='background:{bg}'>"
+            f"<div class='lu-nv' style='color:{col}'>{net:+.1f}</div>"
+            "<div class='lu-nl'>NET</div></div>"
+            "</div>"
+        )
+    return "".join(out)
+
+
+def _show_df(obj, n_rows: int, hide_index: bool = True, cfg=None):
     height = int(min(38 * (n_rows + 1) + 3, 640))
-    cfg = {"Lineup": st.column_config.TextColumn("Lineup", width="large")}
+    kwargs = {"hide_index": hide_index, "height": height}
+    if cfg:
+        kwargs["column_config"] = cfg
     try:
-        st.dataframe(obj, hide_index=True, width="stretch", height=height, column_config=cfg)
+        st.dataframe(obj, width="stretch", **kwargs)
     except Exception:
-        st.dataframe(obj, hide_index=True, use_container_width=True, height=height, column_config=cfg)
+        st.dataframe(obj, use_container_width=True, **kwargs)
 
 
 @st.cache_data(show_spinner=False)
 def _cached_png(payload_json: str) -> bytes:
     return build_lineup_png(json.loads(payload_json))
+
+
+def _render_matrix(df: pd.DataFrame, f: pd.DataFrame):
+    """Duo matrix: NetRtg of each pair among the players with the most minutes."""
+    singles = _combo_table(df, 1)
+    if singles.empty:
+        return
+    top = singles.sort_values("sec", ascending=False).head(MATRIX_PLAYERS)
+    ids = top["player_ids"].tolist()
+    labels = [_short_name(n) for n in top["player_names"]]
+    if len(set(labels)) < len(labels):
+        labels = [_pretty_name(n) for n in top["player_names"]]
+
+    net = {r.player_ids: float(r.netrtg) for r in f.itertuples(index=False)}
+    data = []
+    for a in ids:
+        data.append([np.nan if a == b else net.get("|".join(sorted((a, b))), np.nan)
+                     for b in ids])
+    mat = pd.DataFrame(data, index=labels, columns=labels)
+    if int(mat.notna().sum().sum()) == 0:
+        st.caption("No pair among these players meets the minimum yet.")
+        return
+    m = max(float(np.nanmax(np.abs(mat.values))), 1.0)
+    sty = (mat.style.format("{:+.1f}", na_rep="")
+           .background_gradient(cmap=_CMAP, vmin=-m, vmax=m, axis=None))
+    _show_df(sty, len(mat), hide_index=False)
+    st.caption(
+        f"The {len(ids)} players with the most minutes. A cell appears when the pair meets "
+        "the minimum shown above. NetRtg of the two players on the floor together."
+    )
 
 
 def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
@@ -176,12 +309,15 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     present = set(int(s) for s in avail["season"].unique())
     season_opts = [int(s) for s in seasons if int(s) in present] or sorted(present, reverse=True)
 
-    c1, c2, c3 = st.columns([1, 2, 2])
+    c1, c2, c3, c4 = st.columns([1, 2, 2, 2])
     season = c1.selectbox("Season", season_opts, format_func=_season_label, key="lu_season")
     team_codes = sorted(avail[avail["season"] == season]["team_code"].unique(),
                         key=lambda c: name_fn(c))
     team = c2.selectbox("Team", team_codes, format_func=name_fn, key="lu_team")
     scope = c3.radio("Scope", ["Season", "Rounds", "Match"], horizontal=True, key="lu_scope")
+    unit_name = c4.radio("Unit", list(UNITS.keys()), horizontal=True, key="lu_unit")
+    k = UNITS[unit_name]
+    lab = LABELS[k]
 
     df = _load_team_lineups(conn, int(season), str(team))
     if df.empty:
@@ -211,34 +347,37 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         df = df[df["gamecode"] == gc]
         scope_label = f"{season_txt} | {labels[gc]}"
 
-    agg = _aggregate(df)
+    n_games = int(df["gamecode"].nunique())
+    agg = _aggregate(df) if k == 5 else _finish(_combo_table(df, k))
     if agg.empty:
         st.info("No lineup with enough data for this selection.")
         return
 
-    default_min = MIN_MINUTES_MATCH if scope == "Match" else MIN_MINUTES_DEFAULT
+    base_min = MIN_MINUTES_MATCH if scope == "Match" else MIN_MINUTES_DEFAULT
+    default_min = max(base_min, MIN_PER_GAME[k] * n_games)
     max_min = float(max(10.0, math.ceil(float(agg["minutes"].max()))))
     min_minutes = st.slider("Minimum minutes together", 1.0, max_min,
-                            float(min(default_min, max_min)), 0.5, key=f"lu_min_{scope}")
+                            float(min(default_min, max_min)), 0.5,
+                            key=f"lu_min_{scope}_{k}_{n_games}")
     min_poss = 0.0 if scope == "Match" else MIN_POSS_EACH
 
     f = agg[(agg["minutes"] >= min_minutes) & (agg["poff"] >= min_poss) & (agg["pdef"] >= min_poss)]
     f = f.sort_values("netrtg", ascending=False).reset_index(drop=True)
 
     if f.empty:
-        st.info("No five man unit meets the minimum yet. Lower the minimum minutes, "
-                "or come back as the season goes.")
+        st.info(f"No {lab['plural'][:-1] if lab['plural'].endswith('s') else lab['plural']} "
+                "meets the minimum yet. Lower the minimum minutes, or come back as the season goes.")
         return
 
     best = _row(f.iloc[0])
     worst = _row(f.iloc[-1]) if len(f) > 1 else None
 
     col_b, col_w = st.columns(2)
-    col_b.markdown(_card_html("BEST 5", NAVY, best), unsafe_allow_html=True)
+    col_b.markdown(_card_html(lab["best"], NAVY, best), unsafe_allow_html=True)
     if worst is not None:
-        col_w.markdown(_card_html("WORST 5", ORANGE, worst), unsafe_allow_html=True)
+        col_w.markdown(_card_html(lab["worst"], ORANGE, worst), unsafe_allow_html=True)
     else:
-        col_w.info("Only one lineup meets the minimum, so there is no separate worst 5.")
+        col_w.info("Only one unit meets the minimum, so there is no separate worst one.")
 
     # PNG export
     try:
@@ -247,7 +386,10 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         payload = {
             "team_name": name_fn(team),
             "scope": scope_label,
-            "note": f"Best and worst 5 by NetRtg, min {min_minutes:g} min together",
+            "heading": f"BEST AND WORST {lab['title']}",
+            "kick_best": lab["best"],
+            "kick_worst": lab["worst"],
+            "note": f"By NetRtg, min {min_minutes:g} min together",
             "best": best,
             "worst": worst,
             "team_logo": str(logo) if logo else "",
@@ -255,15 +397,15 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         }
         png = _cached_png(json.dumps(payload, sort_keys=True))
         st.download_button("Download PNG", data=png,
-                           file_name=f"lineup_{team}_{season}.png", mime="image/png",
-                           key="lu_dl")
+                           file_name=f"lineup_{unit_name.replace(' ', '')}_{team}_{season}.png",
+                           mime="image/png", key="lu_dl")
     except Exception as e:
         st.error(f"Export error: {e}")
 
     # Sortable table
-    st.markdown("#### All five man units")
+    st.markdown(f"#### All {lab['plural']}")
     tbl = pd.DataFrame({
-        "Lineup": f["player_names"].apply(
+        "Players": f["player_names"].apply(
             lambda s: ", ".join(_pretty_name(p) for p in str(s).split("|"))),
         "GP": f["gp"].astype(int),
         "MIN": f["minutes"].round(1),
@@ -278,10 +420,54 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
            .format({"MIN": "{:.1f}", "OFF POSS": "{:.1f}", "DEF POSS": "{:.1f}",
                     "ORTG": "{:.1f}", "DRTG": "{:.1f}", "NETRTG": "{:+.1f}"})
            .background_gradient(subset=["NETRTG"], cmap=_CMAP, vmin=-m, vmax=m))
-    _show_df(sty, len(tbl))
+    try:
+        players_cfg = st.column_config.TextColumn("Players", width="large", pinned=True)
+    except TypeError:          # older Streamlit without "pinned"
+        players_cfg = st.column_config.TextColumn("Players", width="large")
+    cfg = {
+        "Players": players_cfg,
+        "GP": st.column_config.NumberColumn("GP", width="small"),
+        "MIN": st.column_config.NumberColumn("MIN", width="small"),
+        "OFF POSS": st.column_config.NumberColumn("OFF POSS", width="small"),
+        "DEF POSS": st.column_config.NumberColumn("DEF POSS", width="small"),
+        "ORTG": st.column_config.NumberColumn("ORTG", width="small"),
+        "DRTG": st.column_config.NumberColumn("DRTG", width="small"),
+        "NETRTG": st.column_config.NumberColumn("NETRTG", width="small"),
+    }
+    try:
+        tbl_box = st.container(key="lu_tbl")
+        list_box = st.container(key="lu_list")
+        keyed = True
+    except TypeError:          # older Streamlit: no keyed containers, table only
+        tbl_box, list_box, keyed = st.container(), None, False
+
+    with tbl_box:
+        _show_df(sty, len(tbl), cfg=cfg)
+
+    if keyed:
+        with list_box:
+            sort_opts = {"NETRTG": ("netrtg", False), "MIN": ("minutes", False),
+                         "ORTG": ("ortg", False), "DRTG": ("drtg", True),
+                         "GP": ("gp", False)}
+            s1, s2 = st.columns([3, 2])
+            sort_key = s1.selectbox("Sort by", list(sort_opts.keys()), key="lu_sort_key")
+            order = s2.radio("Order", ["Best first", "Worst first"], horizontal=True,
+                             key="lu_sort_dir")
+            col_name, low_is_best = sort_opts[sort_key]
+            asc = low_is_best if order == "Best first" else (not low_is_best)
+            fs = f.sort_values(col_name, ascending=asc).reset_index(drop=True)
+            shown = fs.head(30)
+            st.markdown(_list_html(shown), unsafe_allow_html=True)
+            if len(fs) > len(shown):
+                st.caption(f"Showing {len(shown)} of {len(fs)}. Use the table on a larger screen to see all.")
     st.caption(
         "Click a column header to sort. NetRtg is ORTG minus DRTG, per 100 possessions. "
         f"Shown: at least {min_minutes:g} minutes together"
         + ("" if scope == "Match" else f" and {min_poss:g} possessions on each side")
         + ". Small samples swing a lot, read them with care."
     )
+
+    # Duo matrix
+    if k == 2:
+        st.markdown("#### Duo matrix")
+        _render_matrix(df, f)
