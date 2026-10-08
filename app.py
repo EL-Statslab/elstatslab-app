@@ -29,6 +29,7 @@ from PIL import Image
 from gameflow_chart import render_gameflow_png
 import team_cards
 import shotmap_ui
+import lineup_tab
 
 # =============================================================================
 # CONFIG
@@ -2945,8 +2946,8 @@ def main():
         st.title("ELSTATSLAB")
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
 
-    tab_match, tab_cards, tab_shots, tab_method = st.tabs(
-        ["📊 Match Center", "🛡️ Team Cards", "🎯 Shot Maps", "📖 Methodology"]
+    tab_match, tab_cards, tab_shots, tab_lineup, tab_method = st.tabs(
+        ["📊 Match Center", "🛡️ Team Cards", "🎯 Shot Maps", "🧩 Lineup", "📖 Methodology"]
     )
 
     with tab_match:
@@ -2967,6 +2968,15 @@ def main():
             )
         else:
             st.info("Shot Maps are temporarily unavailable.")
+
+    with tab_lineup:
+        lineup_tab.render_lineup_tab(
+            conn=get_conn(),
+            seasons=load_seasons(),
+            name_fn=lambda c: display_name(c, c),
+            elstatslab_logo=ELSTATSLAB_LOGO,
+            team_logo_fn=logo_path,
+        )
 
     with tab_method:
         render_methodology()
