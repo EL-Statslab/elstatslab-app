@@ -93,9 +93,13 @@ def _card(ax, x, y, w, h, kicker, accent, row):
     _t(ax, px, y + 232, "NET RATING", 26, "bold", GREY)
 
     top = y + 270
-    for i, name in enumerate(row["players"][:5]):
-        _t(ax, px, top + 31 + i * 62, name, 42, "semibold", NAVY)
-        ax.plot([px, x + w - 28], [top + (i + 1) * 62] * 2, color=RULE, lw=1.2, zorder=3)
+    names = row["players"][:5]
+    n = max(len(names), 1)
+    rh = 310.0 / n                      # the list always fills the same block
+    size = 42 if n >= 5 else (48 if n == 3 else 56)
+    for i, name in enumerate(names):
+        _t(ax, px, top + rh * (i + 0.5), name, size, "semibold", NAVY)
+        ax.plot([px, x + w - 28], [top + rh * (i + 1)] * 2, color=RULE, lw=1.2, zorder=3)
 
     ly = y + 596
     ax.plot([px, x + w - 28], [ly, ly], color=NAVY, lw=2.4, zorder=3)
@@ -121,7 +125,7 @@ def build_lineup_png(p: dict) -> bytes:
 
     # Title bar
     _draw_logo(ax, _load_logo(p.get("brand_logo")), 124, 116, 120, 120)
-    _t(ax, 206, 86, "BEST AND WORST 5", 30, "bold", ORANGE)
+    _t(ax, 206, 86, p.get("heading", "BEST AND WORST 5"), 30, "bold", ORANGE)
     _t(ax, 206, 150, "EuroLeague | Lineups", 76, "bold", NAVY)
     _t(ax, W - 64, 82, "EUROLEAGUE", 30, "bold", GREY, ha="right")
 
@@ -135,8 +139,8 @@ def build_lineup_png(p: dict) -> bytes:
     _t(ax, 206, 346, p.get("note", ""), 26, "regular", GREY)
 
     # Cards
-    _card(ax, 64, 396, 464, 810, "BEST 5", NAVY, p["best"])
-    _card(ax, 552, 396, 464, 810, "WORST 5", ORANGE, p.get("worst"))
+    _card(ax, 64, 396, 464, 810, p.get("kick_best", "BEST 5"), NAVY, p["best"])
+    _card(ax, 552, 396, 464, 810, p.get("kick_worst", "WORST 5"), ORANGE, p.get("worst"))
 
     # Footer
     ax.plot([64, W - 64], [1240, 1240], color=NAVY, lw=3, zorder=3)
