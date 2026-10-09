@@ -2979,7 +2979,7 @@ they appear:
 
 | Scope | Five man units | Trios | Duos | Possessions |
 |---|---|---|---|---|
-| Single match | 3 minutes | 6 minutes | 10 minutes | 8 on each side |
+| Single match | 3 minutes | 6 minutes | 10 minutes | 6 on each side |
 | Season or group of rounds | 5 minutes, adjustable with the slider | 6 minutes per game | 10 minutes per game | 10 on each side |
 
 On a season or a group of rounds, the trio and duo minimums grow with the number of
