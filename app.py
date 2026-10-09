@@ -466,8 +466,10 @@ def team_season_stats(all_games: pd.DataFrame, up_to_gameday: int,
         # record differs from the games we have for that team in this scope (stale snapshot,
         # or an older round being viewed), its ranks would not match the displayed record,
         # so they are ignored and the computed ranking is kept.
+        # The official table (update_standings.py / build_public_db.py) is the reference: its ranks
+        # are always used, no W/L consistency check.
         stale = []
-        if {"wins", "losses"}.issubset(off.columns):
+        if False and {"wins", "losses"}.issubset(off.columns):
             for i in matched:
                 code = str(df.at[i, "team_code"]).strip().upper()
                 try:
@@ -2007,6 +2009,25 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     h_season = h_row.to_dict()
     a_season = a_row.to_dict()
+
+    # Unplayed match: the scope stops at the previous round, so the computed ranks ignore games
+    # already played in the current round by other teams. For each of the two teams, use the
+    # official current rank when the official W/L record equals the record shown (the team has
+    # not played since), so the header matches the real standings.
+    if (not played) and (not is_postseason) and official_standings is not None \
+            and not official_standings.empty:
+        _off = official_standings.copy()
+        _off["_code"] = _off["team_code"].astype(str).str.strip().str.upper()
+        _off = _off.drop_duplicates("_code").set_index("_code")
+        for _d, _c in ((h_season, hcode), (a_season, acode)):
+            _c = str(_c).strip().upper()
+            try:
+                if (_c in _off.index
+                        and int(_off.at[_c, "wins"]) == int(_d["wins"])
+                        and int(_off.at[_c, "losses"]) == int(_d["losses"])):
+                    _d["rank"] = int(_off.at[_c, "rank"])
+            except (TypeError, ValueError, KeyError):
+                pass
     h_recent = team_recent_stats(all_games, home, int(rnd))
     a_recent = team_recent_stats(all_games, away, int(rnd))
     h_form = team_form_sequence(all_games, home)
