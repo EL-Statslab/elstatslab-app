@@ -2950,6 +2950,54 @@ view is offered. In a single game view, only the zone view is shown.
     )
 
 
+def _methodology_lineups():
+    st.markdown("## Lineups")
+    st.markdown(
+        """
+The Lineup tab and the Lineups section of the Match Center rank groups of players by how
+the team performed while they were on the court together. Units are built from the
+play by play: the starting five, then every substitution, so each stretch of the game is
+attributed to the five players who were actually on the floor.
+
+**NetRtg.** NetRtg is ORTG minus DRTG, per 100 possessions. ORTG is the points the team
+scored while the unit was on the court per 100 of its possessions, and DRTG is the points
+it allowed per 100 of the opponent's possessions. A positive NetRtg means the team
+outscored the opponent with that unit on the floor. Possessions are estimated as
+field goal attempts plus 0.44 times free throw attempts plus turnovers minus offensive
+rebounds.
+
+**Minutes.** The time between two substitutions is credited to the unit that was on the
+court. A game adds up to 40 minutes per team, plus 5 minutes for each overtime.
+
+**Duos and trios.** They are not tracked separately. Every five man unit contains 10
+duos and 10 trios, and their minutes, points and possessions are summed across all the
+five man units in which those players shared the court. A duo or trio therefore
+includes every five it played in, not one specific lineup.
+
+**Minimum samples.** Short stretches swing a lot, so units must clear a minimum before
+they appear:
+
+| Scope | Five man units | Trios | Duos | Possessions |
+|---|---|---|---|---|
+| Single match | 3 minutes | 6 minutes | 10 minutes | 8 on each side |
+| Season or group of rounds | 5 minutes, adjustable with the slider | 6 minutes per game | 10 minutes per game | 10 on each side |
+
+On a season or a group of rounds, the trio and duo minimums grow with the number of
+games the team played in the selection. The slider lets you lower or raise the minimum
+minutes.
+
+**Best and worst.** Units are ranked by NetRtg, with minutes together as the tie breaker.
+On a single match, the best and worst five only compare units that cleared the minimum
+above, so a team can have only one qualifying unit, in which case no worst five is shown.
+A duo or trio that does not reach its minimum shows as not enough minutes together.
+
+**How to read it.** NetRtg over a few minutes is volatile: one hot three point streak can
+move it by dozens of points. Prefer units with more minutes and more games, and treat
+single match numbers as a snapshot, not a verdict.
+"""
+    )
+
+
 def render_methodology():
     st.caption("How every number on ELSTATSLAB is calculated, and how to read it.")
 
@@ -2962,6 +3010,8 @@ def render_methodology():
     _methodology_impact_pulse()
     st.divider()
     _methodology_shot_maps()
+    st.divider()
+    _methodology_lineups()
 
 
 # =============================================================================
