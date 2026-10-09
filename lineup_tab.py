@@ -33,7 +33,7 @@ MIN_POSS_MATCH = 8.0        # single match, same value as MIN_LINEUP_POSS in Gam
 LEGACY_UP_TO = {2026: 37}
 # Trios and duos play much longer together: default minutes = minutes per game
 # of the scope times the number of games, never below the base above.
-MIN_PER_GAME = {5: 0.0, 3: 3.0, 2: 5.0}
+MIN_PER_GAME = {5: 0.0, 3: 6.0, 2: 10.0}
 MATRIX_PLAYERS = 10         # players shown in the duo matrix (most minutes)
 
 NAVY = "#14213D"
@@ -591,7 +591,7 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
                             zoom = float(logo_zoom_fn(code)) if logo_zoom_fn else 1.0
                             sides[key] = {"name": disp, "logo": str(logo) if logo else "",
                                           "zoom": zoom,
-                                          **_match_units(data[code], short=True, legacy=legacy)}
+                                          **_match_units(data[code], short=False, legacy=legacy)}
                         payload = {"round_label": round_label,
                                    "brand_logo": str(brand) if brand and brand.exists() else "",
                                    **sides}
