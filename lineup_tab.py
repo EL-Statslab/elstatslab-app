@@ -26,7 +26,7 @@ from lineup_export import build_lineup_png, build_match_lineups_png
 MIN_MINUTES_DEFAULT = 5.0   # season and rounds scopes (slider default, five man units)
 MIN_MINUTES_MATCH = 3.0     # single match, same as the Game Flow Best 5
 MIN_POSS_EACH = 10.0        # minimum possessions on each side (season and rounds)
-MIN_POSS_MATCH = 8.0        # single match, same value as MIN_LINEUP_POSS in Gameflow_generator.py
+MIN_POSS_MATCH = 6.0        # single match, same value as MIN_LINEUP_POSS in Gameflow_generator.py
 # Matches played before the time and possession fixes keep their published numbers in the
 # Match Center section (old seconds in sec_v1, no possession minimum). The Lineup tab
 # always uses the corrected seconds. {season: last gamecode kept as published}
@@ -34,6 +34,8 @@ LEGACY_UP_TO = {2026: 37}
 # Trios and duos play much longer together: default minutes = minutes per game
 # of the scope times the number of games, never below the base above.
 MIN_PER_GAME = {5: 0.0, 3: 6.0, 2: 10.0}
+LOW_SAMPLE = " (LOW SAMPLE)"   # added to BEST 5 / WORST 5 when no five clears the possession minimum
+SINGLE_KICKER = "ONLY QUALIFYING 5"   # shown instead of BEST 5 when one unit only clears the minimum
 MATRIX_PLAYERS = 10         # players shown in the duo matrix (most minutes)
 
 NAVY = "#14213D"
@@ -511,15 +513,35 @@ def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False) -> dict:
                  & (agg["pdef"] >= min_poss)]
              .sort_values(["netrtg", "minutes"], ascending=[False, False])
              .reset_index(drop=True))
+        relaxed = False
+        if f.empty and k == 5 and min_poss > 0:
+            # no five clears the possession minimum: keep the minutes rule only, flagged LOW SAMPLE
+            f = (agg[agg["minutes"] >= need]
+                 .sort_values(["netrtg", "minutes"], ascending=[False, False])
+                 .reset_index(drop=True))
+            relaxed = True
         if f.empty:
             continue
         if k == 5:
             out["best5"] = _row(f.iloc[0], short)
             if len(f) > 1:
                 out["worst5"] = _row(f.iloc[-1], short)
+            else:
+                # a single unit cleared the minimum: it is neither the best nor the worst
+                out["best5"]["single"] = True
+            if relaxed:
+                for _r in (out["best5"], out["worst5"]):
+                    if _r:
+                        _r["relaxed"] = True
         else:
             out[key] = _row(f.iloc[0], short)
     return out
+
+
+def _kicker5(base: str, row: dict) -> str:
+    if row.get("single"):
+        return SINGLE_KICKER
+    return base + (LOW_SAMPLE if row.get("relaxed") else "")
 
 
 def _mini_html(kicker: str, r: dict, accent: str) -> str:
@@ -559,7 +581,8 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
         st.caption("Units by NetRtg (ORTG minus DRTG per 100 possessions). Minimum "
                    f"{MIN_MINUTES_MATCH:g} min together for a five man unit, "
                    f"{MIN_PER_GAME[3]:g} for a trio and {MIN_PER_GAME[2]:g} for a duo"
-                   f"{poss_txt}. A single match is a small sample, read it with care.")
+                   f"{poss_txt}. If no five clears the possession minimum, fives with {MIN_MINUTES_MATCH:g} minutes "
+                   "or more are shown and marked LOW SAMPLE. A single match is a small sample, read it with care.")
 
         cols = st.columns(2)
         for col, code, accent in ((cols[0], home_code, NAVY), (cols[1], away_code, ORANGE)):
@@ -567,9 +590,13 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
             with col:
                 st.markdown(f"**{home_disp if code == home_code else away_disp}**")
                 if units["best5"]:
-                    st.markdown(_card_html("BEST 5", accent, units["best5"]), unsafe_allow_html=True)
+                    _k5 = _kicker5("BEST 5", units["best5"])
+                    st.markdown(_card_html(_k5, accent, units["best5"]), unsafe_allow_html=True)
+                else:
+                    st.caption(f"No five man unit played {MIN_MINUTES_MATCH:g} minutes together.")
                 if units["worst5"]:
-                    st.markdown(_card_html("WORST 5", accent, units["worst5"]), unsafe_allow_html=True)
+                    st.markdown(_card_html(_kicker5("WORST 5", units["worst5"]), accent, units["worst5"]),
+                                unsafe_allow_html=True)
                 if units["trio"]:
                     st.markdown(_mini_html("BEST TRIO", units["trio"], accent), unsafe_allow_html=True)
                 if units["duo"]:
