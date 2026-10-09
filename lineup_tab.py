@@ -31,6 +31,15 @@ MIN_POSS_MATCH = 6.0        # single match, same value as MIN_LINEUP_POSS in Gam
 # Match Center section (old seconds in sec_v1, no possession minimum). The Lineup tab
 # always uses the corrected seconds. {season: last gamecode kept as published}
 LEGACY_UP_TO = {2026: 37}
+# Matches already published with another possession minimum keep it: {(season, gamecode): minimum}
+POSS_OVERRIDE = {(2026, 40): 8.0}
+
+
+def _match_poss(season, game_code) -> float:
+    try:
+        return POSS_OVERRIDE.get((int(season), int(game_code)), MIN_POSS_MATCH)
+    except (TypeError, ValueError):
+        return MIN_POSS_MATCH
 # Trios and duos play much longer together: default minutes = minutes per game
 # of the scope times the number of games, never below the base above.
 MIN_PER_GAME = {5: 0.0, 3: 6.0, 2: 10.0}
@@ -340,6 +349,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
 
     season_txt = f"Season {_season_label(season)}"
     scope_label = season_txt
+    match_gc = None
 
     if scope == "Rounds":
         gamedays = sorted(int(g) for g in df["gameday"].dropna().unique())
@@ -359,6 +369,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
             return
         gc = st.selectbox("Match", list(labels.keys()), format_func=labels.get, key="lu_match")
         df = df[df["gamecode"] == gc]
+        match_gc = gc
         scope_label = f"{season_txt} | {labels[gc]}"
 
     n_games = int(df["gamecode"].nunique())
@@ -375,7 +386,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     min_minutes = st.slider("Minimum minutes together", 1.0, max_min,
                             float(min(default_min, max_min)), 0.5,
                             key=f"lu_min_{scope}_{k}_{n_games}")
-    min_poss = MIN_POSS_MATCH if scope == "Match" else MIN_POSS_EACH
+    min_poss = _match_poss(season, match_gc) if scope == "Match" else MIN_POSS_EACH
 
     f = agg[(agg["minutes"] >= min_minutes) & (agg["poff"] >= min_poss) & (agg["pdef"] >= min_poss)]
     f = f.sort_values("netrtg", ascending=False).reset_index(drop=True)
@@ -492,7 +503,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
 # ---------------------------------------------------------------------------
 # Match Center section: both teams of one played match
 # ---------------------------------------------------------------------------
-def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False) -> dict:
+def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False, poss=None) -> dict:
     """
     Best and worst 5, best trio and best duo of one team in one match.
     legacy=True reproduces what was published before the fixes: old seconds
@@ -501,7 +512,7 @@ def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False) -> dict:
     out = {"best5": None, "worst5": None, "trio": None, "duo": None}
     if df.empty:
         return out
-    min_poss = 0.0 if legacy else MIN_POSS_MATCH
+    min_poss = 0.0 if legacy else (MIN_POSS_MATCH if poss is None else float(poss))
     if legacy:
         df = df.assign(sec=df["sec_v1"])
     for key, k in (("5", 5), ("trio", 3), ("duo", 2)):
@@ -577,7 +588,7 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
 
         legacy = int(game_code) <= LEGACY_UP_TO.get(int(season), 0)
         poss_txt = ("" if legacy else
-                    f", and at least {MIN_POSS_MATCH:g} possessions on each side")
+                    f", and at least {_match_poss(season, game_code):g} possessions on each side")
         st.caption("Units by NetRtg (ORTG minus DRTG per 100 possessions). Minimum "
                    f"{MIN_MINUTES_MATCH:g} min together for a five man unit, "
                    f"{MIN_PER_GAME[3]:g} for a trio and {MIN_PER_GAME[2]:g} for a duo"
@@ -586,7 +597,8 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
 
         cols = st.columns(2)
         for col, code, accent in ((cols[0], home_code, NAVY), (cols[1], away_code, ORANGE)):
-            units = _match_units(data[code], short=False, legacy=legacy)
+            units = _match_units(data[code], short=False, legacy=legacy,
+                                 poss=_match_poss(season, game_code))
             with col:
                 st.markdown(f"**{home_disp if code == home_code else away_disp}**")
                 if units["best5"]:
@@ -618,7 +630,8 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
                             zoom = float(logo_zoom_fn(code)) if logo_zoom_fn else 1.0
                             sides[key] = {"name": disp, "logo": str(logo) if logo else "",
                                           "zoom": zoom,
-                                          **_match_units(data[code], short=False, legacy=legacy)}
+                                          **_match_units(data[code], short=False, legacy=legacy,
+                                                         poss=_match_poss(season, game_code))}
                         payload = {"round_label": round_label,
                                    "brand_logo": str(brand) if brand and brand.exists() else "",
                                    **sides}
