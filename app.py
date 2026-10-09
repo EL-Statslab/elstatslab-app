@@ -61,6 +61,7 @@ LAST5_MIN_GAP = 0.30
 
 # Interrupteurs des Shot Maps : mettre False pour les desactiver sans retirer le code.
 SHOTMAPS_IN_MATCH = True    # bloc "Shot Map" sous Impact Pulse dans un match
+LINEUPS_IN_MATCH = True     # bloc "Lineups" sous Impact Pulse dans un match
 SHOTMAPS_TAB = True         # onglet "Shot Maps"
 
 # Brand typeface for exported PNGs (Barlow Condensed, matches the X banner).
@@ -2129,6 +2130,22 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             round_label=round_label_long,
             card_index=card_index,
         )
+
+        # ── Lineups ───────────────────────────────────────────────────────
+        if LINEUPS_IN_MATCH:
+            lineup_tab.render_match_lineups(
+                conn=get_conn(),
+                season=rnd_season,
+                game_code=gc_num,
+                home_code=hcode,
+                away_code=acode,
+                home_disp=home_disp,
+                away_disp=away_disp,
+                round_label=round_label_long,
+                card_index=card_index,
+                elstatslab_logo=ELSTATSLAB_LOGO,
+                team_logo_fn=logo_path,
+            )
 
         # ── Shot Map ──────────────────────────────────────────────────────
         if SHOTMAPS_IN_MATCH:
