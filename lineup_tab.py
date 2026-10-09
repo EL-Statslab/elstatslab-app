@@ -20,7 +20,7 @@ import pandas as pd
 import streamlit as st
 from matplotlib.colors import LinearSegmentedColormap
 
-from lineup_export import build_lineup_png
+from lineup_export import build_lineup_png, build_match_lineups_png
 
 # Thresholds, adjust here
 MIN_MINUTES_DEFAULT = 5.0   # season and rounds scopes (slider default, five man units)
@@ -197,9 +197,10 @@ def _combo_table(df: pd.DataFrame, k: int) -> pd.DataFrame:
                                        "pf", "pa", "poff", "pdef"])
 
 
-def _row(r) -> dict:
+def _row(r, short: bool = False) -> dict:
+    conv = _short_name if short else _pretty_name
     return {
-        "players": [_pretty_name(p) for p in str(r["player_names"]).split("|")],
+        "players": [conv(p) for p in str(r["player_names"]).split("|")],
         "net": round(float(r["netrtg"]), 1),
         "ortg": round(float(r["ortg"]), 1),
         "drtg": round(float(r["drtg"]), 1),
@@ -348,6 +349,8 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         scope_label = f"{season_txt} | {labels[gc]}"
 
     n_games = int(df["gamecode"].nunique())
+    st.caption(f"{name_fn(team)}: {n_games} game{'s' if n_games != 1 else ''} in this selection. "
+               "GP in the table is the number of games the unit played together.")
     agg = _aggregate(df) if k == 5 else _finish(_combo_table(df, k))
     if agg.empty:
         st.info("No lineup with enough data for this selection.")
@@ -471,3 +474,110 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     if k == 2:
         st.markdown("#### Duo matrix")
         _render_matrix(df, f)
+
+
+# ---------------------------------------------------------------------------
+# Match Center section: both teams of one played match
+# ---------------------------------------------------------------------------
+def _match_units(df: pd.DataFrame, short: bool) -> dict:
+    """Best and worst 5, best trio and best duo of one team in one match."""
+    out = {"best5": None, "worst5": None, "trio": None, "duo": None}
+    if df.empty:
+        return out
+    for key, k in (("5", 5), ("trio", 3), ("duo", 2)):
+        agg = _aggregate(df) if k == 5 else _finish(_combo_table(df, k))
+        if agg.empty:
+            continue
+        need = max(MIN_MINUTES_MATCH, MIN_PER_GAME[k])
+        f = (agg[agg["minutes"] >= need]
+             .sort_values(["netrtg", "minutes"], ascending=[False, False])
+             .reset_index(drop=True))
+        if f.empty:
+            continue
+        if k == 5:
+            out["best5"] = _row(f.iloc[0], short)
+            if len(f) > 1:
+                out["worst5"] = _row(f.iloc[-1], short)
+        else:
+            out[key] = _row(f.iloc[0], short)
+    return out
+
+
+def _mini_html(kicker: str, r: dict, accent: str) -> str:
+    col = POS_TXT if r["net"] >= 0 else NEG_TXT
+    names = ", ".join(r["players"])
+    return (f"<div class='lu-li' style='border-left:6px solid {accent}'>"
+            f"<div class='lu-bd'><div class='lu-ms' style='margin:0 0 3px 0'>{kicker}</div>"
+            f"<div class='lu-pl'>{names}</div>"
+            f"<div class='lu-ms'>{r['minutes']:.1f} MIN &middot; ORTG {r['ortg']:.1f} &middot; "
+            f"DRTG {r['drtg']:.1f}</div></div>"
+            f"<div class='lu-nb' style='background:{'#DDF0E1' if r['net'] >= 0 else '#F8DCDA'}'>"
+            f"<div class='lu-nv' style='color:{col}'>{r['net']:+.1f}</div>"
+            "<div class='lu-nl'>NET</div></div></div>")
+
+
+def render_match_lineups(conn, season, game_code, home_code, away_code,
+                         home_disp, away_disp, round_label, card_index,
+                         elstatslab_logo, team_logo_fn):
+    """Expander for the Match Center: best and worst 5, trio and duo of both teams."""
+    with st.expander("\U0001F9E9 Lineups \u2014 Best and worst units by NetRtg"):
+        st.markdown(_CSS, unsafe_allow_html=True)
+        try:
+            data = {}
+            for code in (home_code, away_code):
+                full = _load_team_lineups(conn, int(season), str(code))
+                data[code] = full[full["gamecode"] == int(game_code)]
+        except Exception:
+            st.info("Lineup data is not available yet.")
+            return
+        if all(d.empty for d in data.values()):
+            st.info("No lineup data for this game yet.")
+            return
+
+        st.caption("Units by NetRtg (ORTG minus DRTG per 100 possessions). Minimum "
+                   f"{MIN_MINUTES_MATCH:g} min together for a five man unit, "
+                   f"{MIN_PER_GAME[3]:g} for a trio and {MIN_PER_GAME[2]:g} for a duo. "
+                   "A single match is a small sample, read it with care.")
+
+        cols = st.columns(2)
+        for col, code, accent in ((cols[0], home_code, NAVY), (cols[1], away_code, ORANGE)):
+            units = _match_units(data[code], short=False)
+            with col:
+                st.markdown(f"**{home_disp if code == home_code else away_disp}**")
+                if units["best5"]:
+                    st.markdown(_card_html("BEST 5", accent, units["best5"]), unsafe_allow_html=True)
+                if units["worst5"]:
+                    st.markdown(_card_html("WORST 5", accent, units["worst5"]), unsafe_allow_html=True)
+                if units["trio"]:
+                    st.markdown(_mini_html("BEST TRIO", units["trio"], accent), unsafe_allow_html=True)
+                if units["duo"]:
+                    st.markdown(_mini_html("BEST DUO", units["duo"], accent), unsafe_allow_html=True)
+                if not any(units.values()):
+                    st.info("Not enough minutes together.")
+
+        # PNG, generated on demand like the Impact Pulse image
+        png_key = f"lu_png_{card_index}_{game_code}"
+        if png_key not in st.session_state:
+            if st.button("\U0001F4E5 Generate Lineups image", key=f"lu_btn_{card_index}_{game_code}"):
+                with st.spinner("Generating Lineups image..."):
+                    try:
+                        brand = Path(elstatslab_logo) if elstatslab_logo else None
+                        sides = {}
+                        for key, code, disp in (("home", home_code, home_disp),
+                                                ("away", away_code, away_disp)):
+                            logo = team_logo_fn(code)
+                            sides[key] = {"name": disp, "logo": str(logo) if logo else "",
+                                          **_match_units(data[code], short=True)}
+                        payload = {"round_label": round_label,
+                                   "brand_logo": str(brand) if brand and brand.exists() else "",
+                                   **sides}
+                        st.session_state[png_key] = build_match_lineups_png(payload)
+                    except Exception as e:
+                        st.error(f"Export error: {e}")
+                        return
+                st.rerun()
+        if png_key in st.session_state:
+            st.download_button("\U0001F4E5 Download Lineups image",
+                               data=st.session_state[png_key],
+                               file_name=f"Lineups_{home_code}_vs_{away_code}.png",
+                               mime="image/png", key=f"lu_dl_{card_index}_{game_code}")
