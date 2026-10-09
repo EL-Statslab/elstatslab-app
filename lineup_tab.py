@@ -518,7 +518,7 @@ def _mini_html(kicker: str, r: dict, accent: str) -> str:
 
 def render_match_lineups(conn, season, game_code, home_code, away_code,
                          home_disp, away_disp, round_label, card_index,
-                         elstatslab_logo, team_logo_fn):
+                         elstatslab_logo, team_logo_fn, logo_zoom_fn=None):
     """Expander for the Match Center: best and worst 5, trio and duo of both teams."""
     with st.expander("\U0001F9E9 Lineups \u2014 Best and worst units by NetRtg"):
         st.markdown(_CSS, unsafe_allow_html=True)
@@ -566,7 +566,9 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
                         for key, code, disp in (("home", home_code, home_disp),
                                                 ("away", away_code, away_disp)):
                             logo = team_logo_fn(code)
+                            zoom = float(logo_zoom_fn(code)) if logo_zoom_fn else 1.0
                             sides[key] = {"name": disp, "logo": str(logo) if logo else "",
+                                          "zoom": zoom,
                                           **_match_units(data[code], short=True)}
                         payload = {"round_label": round_label,
                                    "brand_logo": str(brand) if brand and brand.exists() else "",
