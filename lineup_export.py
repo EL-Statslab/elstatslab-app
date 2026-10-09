@@ -231,8 +231,16 @@ def _match_side(ax, x, accent, team: dict, label: str):
     y = top + 14
 
     # (kicker, row, section height, name size, net size, row height, listed)
-    specs = [("BEST 5", team.get("best5"), 298, 34, 78, 36, True),
-             ("WORST 5", team.get("worst5"), 288, 30, 64, 32, True),
+    b5 = team.get("best5")
+    w5 = team.get("worst5")
+
+    def _k(base, r):
+        if r and r.get("single"):
+            return "ONLY QUALIFYING 5"
+        return base + (" (LOW SAMPLE)" if r and r.get("relaxed") else "")
+
+    specs = [(_k("BEST 5", b5), b5, 298, 34, 78, 36, True),
+             (_k("WORST 5", w5), w5, 288, 30, 64, 32, True),
              ("BEST TRIO", team.get("trio"), 140, 34, 56, 0, False),
              ("BEST DUO", team.get("duo"), 140, 34, 56, 0, False)]
     for i, (kicker, row, h, nsize, netsize, rows_h, listed) in enumerate(specs):
