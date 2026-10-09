@@ -155,3 +155,97 @@ def build_lineup_png(p: dict) -> bytes:
     fig.savefig(buf, format="png", dpi=150, facecolor=BG)
     plt.close(fig)
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Match view: both teams side by side (4:5)
+# ---------------------------------------------------------------------------
+def _fit(text: str, max_px: float, base: float, min_px: float = 20.0) -> float:
+    """Font size (px) so that a Barlow Condensed text fits in max_px."""
+    est = 0.44 * max(len(text), 1)
+    return max(min(base, max_px / est), min_px)
+
+
+def _match_side(ax, x, accent, team: dict, label: str):
+    w = 456
+    _draw_badge = FancyBboxPatch((x, 200), 100, 100, boxstyle="round,pad=0,rounding_size=22",
+                                 fc="#FFFFFF", ec=accent, lw=4, zorder=3)
+    ax.add_patch(_draw_badge)
+    _draw_logo(ax, _load_logo(team.get("logo")), x + 50, 250, 70, 70)
+    name = team["name"]
+    _t(ax, x + 120, 236, name, _fit(name, w - 130, 52, 20), "bold", accent)
+    _t(ax, x + 120, 280, label, 26, "semibold", GREY)
+
+    top, bot = 322, 1206
+    card = FancyBboxPatch((x, top), w, bot - top, boxstyle="round,pad=0,rounding_size=26",
+                          fc=CARD, ec=RULE, lw=2, zorder=2)
+    ax.add_patch(card)
+    bar = Rectangle((x, top), w, 14, fc=accent, ec="none", zorder=3)
+    ax.add_patch(bar)
+    bar.set_clip_path(card)
+    px, rx = x + 26, x + w - 26
+    y = top + 14
+
+    # (kicker, row, section height, name size, net size, row height, listed)
+    specs = [("BEST 5", team.get("best5"), 298, 34, 78, 36, True),
+             ("WORST 5", team.get("worst5"), 288, 30, 64, 32, True),
+             ("BEST TRIO", team.get("trio"), 140, 34, 56, 0, False),
+             ("BEST DUO", team.get("duo"), 140, 34, 56, 0, False)]
+    for i, (kicker, row, h, nsize, netsize, rows_h, listed) in enumerate(specs):
+        if i:
+            ax.plot([px, rx], [y, y], color=NAVY, lw=2.4, zorder=3)
+        _t(ax, px, y + 34, kicker, 26, "bold", GREY)
+        if row is None:
+            _t(ax, px, y + h / 2 + 10, "Not enough minutes together", 28, "semibold", GREY)
+            y += h
+            continue
+        net = row["net"]
+        _t(ax, rx, y + 40, f"{net:+.1f}", netsize, "bold", POS if net >= 0 else NEG, ha="right")
+        yy = y + 70
+        names = row["players"][:5]
+        if listed:
+            for n in names:
+                _t(ax, px, yy + rows_h / 2, n, nsize, "semibold", NAVY)
+                ax.plot([px, rx], [yy + rows_h] * 2, color=RULE, lw=1.2, zorder=3)
+                yy += rows_h
+        else:
+            txt = ", ".join(names)
+            _t(ax, px, yy + 14, txt, _fit(txt, rx - px, nsize, 22), "semibold", NAVY)
+            yy += 20
+        stat = f"{row['minutes']:.1f} MIN  |  ORTG {row['ortg']:.1f}  |  DRTG {row['drtg']:.1f}"
+        _t(ax, px, yy + 26, stat, 21, "semibold", GREY)
+        y += h
+
+
+def build_match_lineups_png(p: dict) -> bytes:
+    """
+    p: round_label, brand_logo, home / away dicts with name, logo, best5,
+    worst5, trio, duo (each a dict with players, net, ortg, drtg, minutes, or None).
+    """
+    fig = plt.figure(figsize=(12, 15), dpi=150, facecolor=BG)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.axis("off")
+
+    _draw_logo(ax, _load_logo(p.get("brand_logo")), 124, 116, 120, 120)
+    _t(ax, 206, 86, "MATCH LINEUPS BY NETRTG", 30, "bold", ORANGE)
+    _t(ax, 206, 150, f"EuroLeague | {p.get('round_label', '')}", 76, "bold", NAVY)
+    _t(ax, W - 64, 82, "EUROLEAGUE", 30, "bold", GREY, ha="right")
+    _t(ax, W - 64, 114, "Single match sample", 24, "regular", GREY, ha="right")
+
+    _match_side(ax, 64, NAVY, p["home"], "Home")
+    _match_side(ax, 552, ORANGE, p["away"], "Away")
+
+    ax.plot([64, W - 64], [1240, 1240], color=NAVY, lw=3, zorder=3)
+    _t(ax, 64, 1276, "DataViz By EL_STATSLAB", 36, "bold", NAVY)
+    _t(ax, 64, 1312, "Insights, Trends, Metrics, Dataviz", 24, "semibold", ORANGE)
+    _t(ax, W - 64, 1276, "X @EL_Statslab", 36, "bold", NAVY, ha="right")
+    _t(ax, W - 64, 1312, "elstatslab.com", 24, "regular", GREY, ha="right")
+
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, facecolor=BG)
+    plt.close(fig)
+    return buf.getvalue()
