@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import font_manager
 from matplotlib.patches import FancyBboxPatch, Rectangle
-from PIL import Image
+from PIL import Image, ImageDraw
 
 FONTS_DIR = Path("fonts")
 W, H = 1080, 1350
@@ -49,18 +49,62 @@ def _t(ax, x, y, s, px, weight="bold", color=NAVY, ha="left", va="center"):
             ha=ha, va=va, zorder=10)
 
 
-def _load_logo(path):
+def _autocrop(a: np.ndarray, strip_sponsor: bool = True) -> np.ndarray:
+    """
+    Crop an RGBA array (floats 0 to 1) to its real content: trims the transparent
+    margin and, when a secondary block (sponsor, text) is separated from the main
+    drawing by a real empty band, keeps only the first block. Same logic as
+    app.py and gameflow_chart.py so every crest has the same visual weight.
+    """
+    alpha = a[:, :, 3]
+    ys, xs = np.where(alpha > 0.04)
+    if len(xs) == 0:
+        return a
+    cropped = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    if not strip_sponsor:
+        return cropped
+    h = cropped.shape[0]
+    row_has = (cropped[:, :, 3] > 0.04).sum(axis=1)
+    thr = cropped.shape[1] * 0.005
+    gap_start = None
+    for i, v in enumerate(row_has):
+        if v < thr:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None:
+                if (i - gap_start) > h * 0.015 and gap_start > h * 0.25:
+                    cropped = cropped[:gap_start]
+                    ys2, xs2 = np.where(cropped[:, :, 3] > 0.04)
+                    if len(xs2):
+                        cropped = cropped[ys2.min():ys2.max() + 1, xs2.min():xs2.max() + 1]
+                    return cropped
+            gap_start = None
+    return cropped
+
+
+def _load_logo(path, knock_white: bool = False):
+    """
+    Same handling as the Impact Pulse export. Brand logo (knock_white=True): a fully
+    opaque file loses its white through an alpha ramp on whiteness. Team crest:
+    trimmed, sponsor block dropped, composited on white for the white badge.
+    """
     if not path:
         return None
     try:
         im = Image.open(path).convert("RGBA")
     except Exception:
         return None
-    a = np.array(im)
-    ys, xs = np.where(a[:, :, 3] > 10)
-    if len(xs):
-        im = im.crop((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
-    return np.asarray(im)
+    im.thumbnail((900, 900), Image.LANCZOS)
+    a = np.asarray(im, dtype=np.float32) / 255.0
+    if knock_white:
+        if a[:, :, 3].min() > 0.98:
+            whiteness = a[:, :, :3].min(axis=2)
+            a[:, :, 3] = np.clip((1.0 - whiteness - 0.03) / 0.24, 0.0, 1.0)
+        return _autocrop(a, strip_sponsor=False)
+    a = _autocrop(a)
+    al = a[:, :, 3:4]
+    return a[:, :, :3] * al + (1.0 - al)
 
 
 def _draw_logo(ax, arr, cx, cy, box_w, box_h):
@@ -124,7 +168,7 @@ def build_lineup_png(p: dict) -> bytes:
     ax.axis("off")
 
     # Title bar
-    _draw_logo(ax, _load_logo(p.get("brand_logo")), 124, 116, 120, 120)
+    _draw_logo(ax, _load_logo(p.get("brand_logo"), knock_white=True), 124, 116, 120, 120)
     _t(ax, 206, 86, p.get("heading", "BEST AND WORST 5"), 30, "bold", ORANGE)
     _t(ax, 206, 150, "EuroLeague | Lineups", 76, "bold", NAVY)
     _t(ax, W - 64, 82, "EUROLEAGUE", 30, "bold", GREY, ha="right")
@@ -171,7 +215,7 @@ def _match_side(ax, x, accent, team: dict, label: str):
     _draw_badge = FancyBboxPatch((x, 200), 100, 100, boxstyle="round,pad=0,rounding_size=22",
                                  fc="#FFFFFF", ec=accent, lw=4, zorder=3)
     ax.add_patch(_draw_badge)
-    _draw_logo(ax, _load_logo(team.get("logo")), x + 50, 250, 70, 70)
+    _draw_logo(ax, _load_logo(team.get("logo")), x + 50, 250, 74, 74)
     name = team["name"]
     _t(ax, x + 120, 236, name, _fit(name, w - 130, 52, 20), "bold", accent)
     _t(ax, x + 120, 280, label, 26, "semibold", GREY)
@@ -228,9 +272,10 @@ def build_match_lineups_png(p: dict) -> bytes:
     ax.set_ylim(H, 0)
     ax.axis("off")
 
-    _draw_logo(ax, _load_logo(p.get("brand_logo")), 124, 116, 120, 120)
+    _draw_logo(ax, _load_logo(p.get("brand_logo"), knock_white=True), 124, 116, 120, 120)
     _t(ax, 206, 86, "MATCH LINEUPS BY NETRTG", 30, "bold", ORANGE)
-    _t(ax, 206, 150, f"EuroLeague | {p.get('round_label', '')}", 76, "bold", NAVY)
+    title = f"EuroLeague | {str(p.get('round_label', '')).replace('Regular Season ', '').strip()}"
+    _t(ax, 206, 150, title, _fit(title, W - 64 - 206, 76, 40), "bold", NAVY)
     _t(ax, W - 64, 82, "EUROLEAGUE", 30, "bold", GREY, ha="right")
     _t(ax, W - 64, 114, "Single match sample", 24, "regular", GREY, ha="right")
 
