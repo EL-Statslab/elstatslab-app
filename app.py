@@ -2145,6 +2145,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                 card_index=card_index,
                 elstatslab_logo=ELSTATSLAB_LOGO,
                 team_logo_fn=logo_path,
+                logo_zoom_fn=logo_zoom,
             )
 
         # ── Shot Map ──────────────────────────────────────────────────────
