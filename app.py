@@ -9,9 +9,12 @@ Run locally:
 
 import base64
 import io
+import ipaddress
 import json
 import math
 import sqlite3
+import threading
+import uuid
 import zlib
 from pathlib import Path
 from typing import Optional
@@ -21,6 +24,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
 from matplotlib.gridspec import GridSpec
 from matplotlib import font_manager
@@ -2921,7 +2925,126 @@ def render_methodology():
     _methodology_shot_maps()
 
 
+# =============================================================================
+# VISITOR TRACKING (GoatCounter, sent from the server)
+# DO NOT REMOVE: this block and the two calls at the top of main() feed the
+# visitor dashboard at elstatslab.goatcounter.com.
+# =============================================================================
+# One hit per browser session, sent from Python so no script has to run in the
+# visitor's browser. The token is read from the Streamlit Secrets:
+#     [goatcounter]
+#     code = "elstatslab"
+#     token = "..."
+# If the secrets are missing or GoatCounter does not answer, the app simply
+# carries on without tracking.
+#   ?me=1       the visit is not counted (use it in your own bookmark)
+#   ?gcdebug=1  shows a diagnostic panel at the top of the page
+SEND_VISITOR_IP = True   # only used when a public IP is available
+_BOT_MARKERS = ("headlesschrome", "playwright", "bot", "crawler", "spider",
+                "python-requests", "curl", "wget")
+
+
+def _goatcounter_post(code: str, token: str, hit: dict) -> str:
+    result = ""
+    for attempt in (1, 2):
+        try:
+            r = requests.post(
+                f"https://{code}.goatcounter.com/api/v0/count",
+                headers={"Authorization": f"Bearer {token}",
+                         "Content-Type": "application/json"},
+                json={"hits": [hit]},
+                timeout=4,
+            )
+            result = f"HTTP {r.status_code} {r.text[:300]} (attempt {attempt})"
+            if r.status_code < 500:
+                return result
+        except Exception as e:
+            result = f"Error: {type(e).__name__}: {e} (attempt {attempt})"
+    return result
+
+
+def track_visit_once() -> None:
+    if st.session_state.get("_gc_done"):
+        return
+    st.session_state["_gc_done"] = True
+
+    debug = bool(st.query_params.get("gcdebug"))
+    st.session_state["_gc_debug"] = debug
+    info: dict = {"step": "start"}
+    st.session_state["_gc_info"] = info
+
+    # Owner visit: an address ending with ?me=1 is not counted. Streamlit Cloud
+    # does not pass cookies to the app, so it has to be in the address.
+    if st.query_params.get("me") == "1":
+        info["step"] = "stopped: owner visit (?me=1)"
+        try:
+            st.toast("This visit is not counted.")
+        except Exception:
+            pass
+        return
+
+    try:
+        cfg = st.secrets["goatcounter"]
+        code, token = cfg["code"], cfg["token"]
+        info["secrets"] = f"found (code={code}, token length={len(str(token))})"
+    except Exception as e:
+        info["secrets"] = f"NOT FOUND ({type(e).__name__})"
+        info["step"] = "stopped: no secrets"
+        return
+
+    ua, ip = "", ""
+    try:
+        headers = st.context.headers
+        ua = headers.get("User-Agent", "") or ""
+        if SEND_VISITOR_IP:
+            ip = (headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+    except Exception as e:
+        info["headers"] = f"error: {type(e).__name__}: {e}"
+    info["user_agent"] = ua or "(empty)"
+    info["ip_seen"] = ip or "(none)"
+
+    # Streamlit Cloud only exposes an internal address (192.168.x.x). Sending it
+    # would make GoatCounter treat visitors with the same browser as one person,
+    # so private addresses are dropped and a random session id is used instead.
+    try:
+        if ip and not ipaddress.ip_address(ip).is_global:
+            info["ip_note"] = "private address ignored, random session id used"
+            ip = ""
+    except ValueError:
+        ip = ""
+
+    # Skip the keep-awake workflow and other automated visitors.
+    if any(marker in ua.lower() for marker in _BOT_MARKERS):
+        info["step"] = "stopped: user agent looks like a bot"
+        return
+
+    hit = {"path": "/", "title": "ELSTATSLAB Match Center"}
+    if ua and ip:
+        hit["user_agent"] = ua
+        hit["ip"] = ip
+    else:
+        hit["session"] = uuid.uuid4().hex
+        if ua:
+            hit["user_agent"] = ua
+
+    if debug:
+        info["goatcounter_answer"] = _goatcounter_post(code, token, hit)
+        info["step"] = "sent (synchronous, debug mode)"
+    else:
+        info["step"] = "sent (background)"
+        threading.Thread(target=_goatcounter_post, args=(code, token, hit),
+                         daemon=True).start()
+
+
+def show_tracking_debug() -> None:
+    if st.session_state.get("_gc_debug"):
+        with st.expander("GoatCounter diagnostic", expanded=True):
+            st.json(st.session_state.get("_gc_info", {}))
+
+
 def main():
+    track_visit_once()
+    show_tracking_debug()
     st.markdown(
         """
         <style>
