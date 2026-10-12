@@ -16,7 +16,7 @@ Usage in app.py:
         team_rankings.render_team_rankings(
             get_conn(),
             name_fn=lambda c: display_name(c, c),
-            logo_loader=..., brand_logo=ELSTATSLAB_LOGO, euroleague_logo=EUROLEAGUE_LOGO,
+            logo_loader=..., brand_logo=ELSTATSLAB_LOGO,
         )
 """
 
@@ -219,12 +219,11 @@ def _build_view(values, pct, gp, mode, name_fn=None):
     return styler, len(shown)
 
 
-def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None,
-                         brand_logo=None, euroleague_logo=None):
+def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None, brand_logo=None):
     """
     name_fn: team code in, display name out.
     logo_loader: team code in, PIL image out (optional, team logos in the PNG).
-    brand_logo and euroleague_logo: optional paths of the PNG header logos.
+    brand_logo: optional path of the ELSTATSLAB logo, shown in the PNG header.
     """
     conn, opened_here = _connect(conn_or_path)
     try:
@@ -265,7 +264,6 @@ def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None,
             f"Round {last_round}" if last_round else None,
             names=name_fn,
             brand_logo=brand_logo,
-            euroleague_logo=euroleague_logo,
             logo_loader=logo_loader,
         )
         st.download_button(
