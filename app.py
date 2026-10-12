@@ -3162,14 +3162,13 @@ def show_tracking_debug() -> None:
 
 
 def _ranking_logo(code: str):
-    """Team logo for the Team Rankings PNG, cropped to its visible content."""
+    """Team logo for the Team Rankings PNG: cropped like the other visuals, so every
+    logo can be centred in the same box."""
     lp = logo_path(code)
     if not lp:
         return None
     try:
-        img = Image.open(lp).convert("RGBA")
-        box = img.getchannel("A").point(lambda v: 255 if v > 10 else 0).getbbox()
-        return img.crop(box) if box else img
+        return team_rankings_export.prepare_team_logo(Image.open(lp))
     except Exception:
         return None
 
@@ -3219,7 +3218,6 @@ def main():
             name_fn=lambda c: display_name(c, c),
             logo_loader=_ranking_logo,
             brand_logo=ELSTATSLAB_LOGO if ELSTATSLAB_LOGO.exists() else None,
-            euroleague_logo=EUROLEAGUE_LOGO if EUROLEAGUE_LOGO.exists() else None,
         )
 
     with tab_shots:
