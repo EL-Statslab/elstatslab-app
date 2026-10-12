@@ -214,6 +214,9 @@ def prepare_team_logo(img):
     import numpy as np
 
     img = img.convert("RGBA")
+    # Large logos (Fenerbahce in particular) would use a lot of memory as float arrays.
+    # The PNG only needs a 40x36 box, so work on a reduced copy.
+    img.thumbnail((400, 400), Image.LANCZOS)
     arr = np.asarray(img, dtype=np.float32) / 255.0
     alpha = arr[:, :, 3]
     ys, xs = np.where(alpha > 0.04)
@@ -503,7 +506,7 @@ def main():
     finally:
         conn.close()
 
-    label = f"Round {rnd}" if rnd else None
+    label = f"Through Round {rnd}" if rnd else None
     views = ["ratings", "four_factors"] if args.view == "both" else [args.view]
     if args.out and len(views) > 1:
         print("--out needs a single --view, using the default file names instead.")
