@@ -222,6 +222,19 @@ def _build_view(values, pct, gp, mode, name_fn=None):
     return styler, len(shown)
 
 
+@st.cache_data(show_spinner=False, max_entries=4)
+def _cached_png(values, pct, gp, season_label, round_label, view, _names, _brand, _loader):
+    """
+    The PNG is built once per data set, not on every page run. Streamlit runs every tab at
+    each interaction, so without this cache each visitor would redraw both images each time.
+    The underscore arguments (functions, paths) are not part of the cache key.
+    """
+    return build_team_rankings_png(
+        values, pct, gp, season_label, round_label,
+        names=_names, brand_logo=_brand, logo_loader=_loader, view=view,
+    )
+
+
 def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None, brand_logo=None):
     """
     name_fn: team code in, display name out.
@@ -267,13 +280,10 @@ def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None, brand_log
         ("four_factors", "Download PNG (Four Factors)", "team_rankings_png_ff"),
     ):
         try:
-            png = build_team_rankings_png(
+            png = _cached_png(
                 values, pct, gp, _season_label(season),
-                f"Round {last_round}" if last_round else None,
-                names=name_fn,
-                brand_logo=brand_logo,
-                logo_loader=logo_loader,
-                view=view,
+                f"Through Round {last_round}" if last_round else None,
+                view, name_fn, brand_logo, logo_loader,
             )
             st.download_button(
                 button_label,
