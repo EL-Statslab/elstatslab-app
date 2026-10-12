@@ -27,7 +27,9 @@ import pandas as pd
 import streamlit as st
 
 # The percentile gradient lives in the export module, so the table and the PNG share it
-from team_rankings_export import build_team_rankings_png, pct_colors
+from team_rankings_export import VIEWS, build_team_rankings_png, pct_colors
+
+VIEW_FILES = {name: cfg["file"] for name, cfg in VIEWS.items()}
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -118,7 +120,8 @@ def percentile_scale(values, higher_is_better):
 def compute_team_table(conn, season):
     """
     Returns (values, percentiles, games_played), indexed by team code.
-    All figures are averages per game over the regular season games already played.
+    Ratings and pace are averages over the regular season games already played, the other
+    ratios are totals over the season.
     """
     games = pd.read_sql_query(
         """
@@ -243,7 +246,7 @@ def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None, brand_log
 
     st.subheader("Team Rankings")
     st.caption(
-        f"EuroLeague {_season_label(season)} regular season, averages per game. "
+        f"EuroLeague {_season_label(season)} regular season, games played so far. "
         "Click any column header to sort."
     )
 
@@ -258,23 +261,29 @@ def render_team_rankings(conn_or_path, name_fn=None, logo_loader=None, brand_log
     styler, n_rows = _build_view(values, pct, gp, mode, name_fn)
     st.dataframe(styler, use_container_width=True, height=35 * (n_rows + 1) + 3)
 
-    try:
-        png = build_team_rankings_png(
-            values, pct, gp, _season_label(season),
-            f"Round {last_round}" if last_round else None,
-            names=name_fn,
-            brand_logo=brand_logo,
-            logo_loader=logo_loader,
-        )
-        st.download_button(
-            "Download PNG",
-            data=png,
-            file_name=f"team_rankings_round_{last_round if last_round else 'x'}.png",
-            mime="image/png",
-            key="team_rankings_png",
-        )
-    except Exception:
-        pass
+    round_part = last_round if last_round else "x"
+    for view, button_label, key in (
+        ("ratings", "Download PNG", "team_rankings_png"),
+        ("four_factors", "Download PNG (Four Factors)", "team_rankings_png_ff"),
+    ):
+        try:
+            png = build_team_rankings_png(
+                values, pct, gp, _season_label(season),
+                f"Round {last_round}" if last_round else None,
+                names=name_fn,
+                brand_logo=brand_logo,
+                logo_loader=logo_loader,
+                view=view,
+            )
+            st.download_button(
+                button_label,
+                data=png,
+                file_name=f"{VIEW_FILES[view]}_round_{round_part}.png",
+                mime="image/png",
+                key=key,
+            )
+        except Exception:
+            pass
 
     st.caption(
         "Colours follow the percentile among all teams, green is better and red is worse. "
