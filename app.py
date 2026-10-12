@@ -34,6 +34,8 @@ from gameflow_chart import render_gameflow_png
 import team_cards
 import shotmap_ui
 import lineup_tab
+import team_rankings
+import team_rankings_export
 
 # =============================================================================
 # CONFIG
@@ -2998,6 +3000,32 @@ single match numbers as a snapshot, not a verdict.
     )
 
 
+def _methodology_team_rankings():
+    st.subheader("Team Rankings")
+    st.markdown(
+        """
+Every team on one table, for the current regular season, using played games only.
+All figures are averages per game. Click a column header to sort, and switch between
+the raw values and the percentiles.
+
+**Ratings.** OffRtg and DefRtg are the points scored and allowed per 100 possessions,
+NetRtg is the difference. Pace is the number of possessions per game.
+
+**Four Factors.** eFG% (shooting), TOV% (turnovers per possession), OREB% and DREB%
+(share of the available rebounds), and FT Rate (free throw attempts per field goal attempt),
+shown for the team and against it. The columns starting with Opp describe what opponents
+do against that team.
+
+**Percentiles.** Each team is ranked among all teams, from 0 for the lowest to 100 for the
+highest, the same way as on the Team Cards, and the colours use the same five steps.
+Green is always the good side: for DefRtg, TOV%, Opp eFG% and Opp FT Rate a lower value is
+better. Pace is not coloured because it describes a style, not a quality. NetRtg, OffRtg,
+DefRtg, Pace, TOV%, OREB% and DREB% are calculated exactly like on the Team Cards, and the
+other ratios are totals over the season rather than averages of single games.
+"""
+    )
+
+
 def render_methodology():
     st.caption("How every number on ELSTATSLAB is calculated, and how to read it.")
 
@@ -3006,6 +3034,8 @@ def render_methodology():
     _methodology_game_flow()
     st.divider()
     _methodology_team_cards()
+    st.divider()
+    _methodology_team_rankings()
     st.divider()
     _methodology_impact_pulse()
     st.divider()
@@ -3131,6 +3161,19 @@ def show_tracking_debug() -> None:
             st.json(st.session_state.get("_gc_info", {}))
 
 
+def _ranking_logo(code: str):
+    """Team logo for the Team Rankings PNG, cropped to its visible content."""
+    lp = logo_path(code)
+    if not lp:
+        return None
+    try:
+        img = Image.open(lp).convert("RGBA")
+        box = img.getchannel("A").point(lambda v: 255 if v > 10 else 0).getbbox()
+        return img.crop(box) if box else img
+    except Exception:
+        return None
+
+
 def main():
     track_visit_once()
     show_tracking_debug()
@@ -3158,8 +3201,9 @@ def main():
         st.title("ELSTATSLAB")
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
 
-    tab_match, tab_cards, tab_shots, tab_lineup, tab_method = st.tabs(
-        ["📊 Match Center", "🛡️ Team Cards", "🎯 Shot Maps", "🧩 Lineup", "📖 Methodology"]
+    tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_method = st.tabs(
+        ["📊 Match Center", "🛡️ Team Cards", "📈 Team Rankings", "🎯 Shot Maps",
+         "🧩 Lineup", "📖 Methodology"]
     )
 
     with tab_match:
@@ -3168,6 +3212,15 @@ def main():
 
     with tab_cards:
         team_cards.render()
+
+    with tab_rankings:
+        team_rankings.render_team_rankings(
+            get_conn(),
+            name_fn=lambda c: display_name(c, c),
+            logo_loader=_ranking_logo,
+            brand_logo=ELSTATSLAB_LOGO if ELSTATSLAB_LOGO.exists() else None,
+            euroleague_logo=EUROLEAGUE_LOGO if EUROLEAGUE_LOGO.exists() else None,
+        )
 
     with tab_shots:
         if SHOTMAPS_TAB:
