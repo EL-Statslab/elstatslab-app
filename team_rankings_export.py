@@ -37,6 +37,8 @@ LOCAL_DB = r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db"
 W = 1080
 MARGIN = 48
 ROW_H = 44
+LOGO_BOX_W = 40
+LOGO_BOX_H = 36
 
 # key, header label, coloured
 COLUMNS = [
@@ -136,6 +138,85 @@ def _paste_logo(img, path_or_image, box_h, x, y, max_w=None):
     return new_w
 
 
+def brand_logo_image(path_or_image):
+    """
+    ELSTATSLAB logo with a real alpha channel, cropped to its content.
+    A logo saved on a white or opaque background gets its white turned into transparency
+    (ink colour recovered, no halo), same method as brand_logo_b64 in site_theme.py.
+    """
+    import numpy as np
+
+    im = path_or_image if isinstance(path_or_image, Image.Image) else Image.open(path_or_image)
+    im = im.convert("RGBA")
+    im.thumbnail((900, 900), Image.LANCZOS)
+    arr = np.asarray(im, dtype=np.float32) / 255.0
+    rgb, alpha = arr[:, :, :3], arr[:, :, 3]
+    flat = rgb * alpha[:, :, None] + (1.0 - alpha[:, :, None])
+    dist = 1.0 - flat.min(axis=2)
+    a = np.clip((dist - 0.03) / 0.24, 0.0, 1.0)
+    a_safe = np.maximum(a, 1e-3)[:, :, None]
+    ink = np.clip((flat - (1.0 - a_safe)) / a_safe, 0.0, 1.0)
+    out = np.dstack([ink, a])
+    ys, xs = np.where(a > 0.04)
+    if len(xs):
+        out = out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return Image.fromarray((out * 255).astype("uint8"), "RGBA")
+
+
+def prepare_team_logo(img):
+    """
+    Crop a team logo to its real content, and drop a secondary block (sponsor, text)
+    separated from the main drawing by an empty band. Same logic as _autocrop_logo in app.py,
+    so every logo has a comparable weight and can be centred in the same box.
+    """
+    import numpy as np
+
+    img = img.convert("RGBA")
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    alpha = arr[:, :, 3]
+    ys, xs = np.where(alpha > 0.04)
+    if len(xs) == 0:
+        return img
+    y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+    cropped = arr[y0:y1 + 1, x0:x1 + 1]
+
+    h = cropped.shape[0]
+    a2 = cropped[:, :, 3]
+    row_has_content = (a2 > 0.04).sum(axis=1)
+    threshold = a2.shape[1] * 0.005
+    gap_start = None
+    for i, count in enumerate(row_has_content):
+        if count < threshold:
+            if gap_start is None:
+                gap_start = i
+        else:
+            if gap_start is not None:
+                gap_h = i - gap_start
+                if gap_h > h * 0.015 and gap_start > h * 0.25:
+                    cropped = cropped[:gap_start]
+                    a3 = cropped[:, :, 3]
+                    ys2, xs2 = np.where(a3 > 0.04)
+                    if len(xs2):
+                        cropped = cropped[ys2.min():ys2.max() + 1, xs2.min():xs2.max() + 1]
+                    break
+            gap_start = None
+    return Image.fromarray((np.clip(cropped, 0, 1) * 255).astype("uint8"), "RGBA")
+
+
+def _paste_contained(img, logo, cx, cy, box_w, box_h):
+    """Paste a logo scaled to fit inside a box, centred on (cx, cy)."""
+    try:
+        logo = logo.convert("RGBA")
+    except Exception:
+        return False
+    ratio = min(box_w / logo.width, box_h / logo.height)
+    new_w = max(1, round(logo.width * ratio))
+    new_h = max(1, round(logo.height * ratio))
+    logo = logo.resize((new_w, new_h), Image.LANCZOS)
+    img.paste(logo, (round(cx - new_w / 2), round(cy - new_h / 2)), logo)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Image
 # ---------------------------------------------------------------------------
@@ -148,7 +229,6 @@ def build_team_rankings_png(
     round_label=None,
     names=None,
     brand_logo=None,
-    euroleague_logo=None,
     logo_loader=None,
     fonts_dir=None,
 ):
@@ -156,12 +236,13 @@ def build_team_rankings_png(
     values, pct, gp come from team_rankings.compute_team_table.
     names is optional: a function that turns a team code into its display name.
     logo_loader is optional: a function that takes a team code and returns a PIL image or None.
+    brand_logo: path or image of the ELSTATSLAB logo, its white background is made transparent.
     Returns the PNG as bytes.
     """
     order = list(values["net_rtg"].sort_values(ascending=False).index)
     n = len(order)
 
-    header_h = 262
+    header_h = 196
     col_head_h = 54
     legend_h = 50
     footer_h = 112
@@ -172,34 +253,37 @@ def build_team_rankings_png(
 
     f = lambda weight, size: _font(weight, size, fonts_dir)
 
-    # Header: logos on the sides, title in the middle
-    logo_h = 56
-    left_used = 0
-    if brand_logo:
-        left_used = _paste_logo(img, brand_logo, logo_h, MARGIN, 28, max_w=300)
-    if not left_used:
-        d.text((MARGIN, 28 + logo_h // 2), "EL_STATSLAB", font=f("bold", 40), fill=NAVY, anchor="lm")
-    if euroleague_logo:
+    # Header, same structure as the other exports: transparent ELSTATSLAB logo on the left,
+    # visual name in orange, title in dark blue, grey subtitle, EUROLEAGUE in grey on the right.
+    logo_h = 104
+    logo_w = 0
+    if brand_logo is not None:
         try:
-            el = Image.open(euroleague_logo).convert("RGBA")
-            w_el = round(el.width * logo_h / el.height)
-            w_el = min(w_el, 300)
-            _paste_logo(img, euroleague_logo, logo_h, W - MARGIN - w_el, 28, max_w=300)
+            logo = brand_logo_image(brand_logo)
+            ratio = logo_h / logo.height
+            logo_w = max(1, round(logo.width * ratio))
+            if logo_w > 200:
+                logo_w = 200
+                logo_h_used = max(1, round(logo.height * 200 / logo.width))
+            else:
+                logo_h_used = logo_h
+            logo = logo.resize((logo_w, logo_h_used), Image.LANCZOS)
+            img.paste(logo, (MARGIN, 30 + (logo_h - logo_h_used) // 2), logo)
         except Exception:
-            pass
+            logo_w = 0
+    text_x = MARGIN + (logo_w + 30 if logo_w else 0)
 
-    d.text((MARGIN, 168), "TEAM RANKINGS", font=f("bold", 76), fill=NAVY, anchor="ls")
-    sub = "EuroLeague"
-    if round_label:
-        sub = f"EuroLeague | {round_label}"
-    d.text((MARGIN, 212), sub, font=f("semibold", 38), fill=ORANGE, anchor="ls")
+    d.text((text_x, 66), "TEAM RANKINGS", font=f("bold", 34), fill=ORANGE, anchor="ls")
+    title = f"EuroLeague | {round_label}" if round_label else "EuroLeague"
+    d.text((text_x, 128), title, font=f("bold", 68), fill=NAVY, anchor="ls")
     d.text(
-        (MARGIN, 246),
+        (text_x, 162),
         f"{season_label} regular season, averages per game, ranked by NetRtg",
         font=f("regular", 24),
         fill=NAVY_SOFT,
         anchor="ls",
     )
+    d.text((W - MARGIN, 54), "EUROLEAGUE", font=f("semibold", 34), fill=NAVY_SOFT, anchor="rs")
 
     # Column geometry
     x0, x1 = MARGIN, W - MARGIN
@@ -222,7 +306,6 @@ def build_team_rankings_png(
 
     # Rows
     y = line_y + 2
-    name_max = team_w - 10
     for i, team in enumerate(order):
         if i % 2 == 0:
             d.rectangle([x0, y, x1, y + ROW_H - 1], fill=BEIGE_STRIPE)
@@ -230,18 +313,19 @@ def build_team_rankings_png(
 
         d.text((x0 + 6, cy), str(i + 1), font=f("semibold", 28), fill=NAVY_SOFT, anchor="lm")
 
+        # Every logo sits centred in the same box, so the logos line up in one column
+        # and every team name starts at the same x.
         tx = team_x
         if logo_loader is not None:
+            tx = team_x + LOGO_BOX_W + 14
             try:
                 logo = logo_loader(team)
             except Exception:
                 logo = None
             if logo is not None:
-                used = _paste_logo(img, logo, 32, int(team_x), int(cy - 16), max_w=40)
-                if used:
-                    tx = team_x + 46
+                _paste_contained(img, logo, team_x + LOGO_BOX_W / 2, cy, LOGO_BOX_W, LOGO_BOX_H)
         label = names(team) if names else str(team)
-        name_font = _fit_font(d, label, "bold", 31, name_max if tx == team_x else name_max - 46, fonts_dir)
+        name_font = _fit_font(d, label, "bold", 31, team_w - (tx - team_x) - 8, fonts_dir)
         d.text((tx, cy), label, font=name_font, fill=NAVY, anchor="lm")
 
         d.text((gp_cx, cy), str(int(gp[team])), font=f("semibold", 28), fill=NAVY_SOFT, anchor="mm")
@@ -331,9 +415,7 @@ def team_logo_image(code, logos_dir):
     if not path.exists():
         return None
     try:
-        img = Image.open(path).convert("RGBA")
-        box = img.getchannel("A").point(lambda v: 255 if v > 10 else 0).getbbox()
-        return img.crop(box) if box else img
+        return prepare_team_logo(Image.open(path))
     except Exception:
         return None
 
@@ -349,9 +431,7 @@ def main():
     here = Path(__file__).resolve().parent
     logos = here / "Logos"
     brand = logos / "logo.png"
-    el_logo = logos / "EL.png"
     print("ELSTATSLAB logo:", brand if brand.exists() else "not found")
-    print("EuroLeague logo:", el_logo if el_logo.exists() else "not found")
 
     db_path = args.db or (str(PUBLIC_DB) if PUBLIC_DB.exists() else LOCAL_DB)
     print("Database:", db_path)
@@ -371,7 +451,6 @@ def main():
         values, pct, gp, tr._season_label(season), label,
         names=lambda c: TEAM_DISPLAY_NAMES.get(c, c),
         brand_logo=brand if brand.exists() else None,
-        euroleague_logo=el_logo if el_logo.exists() else None,
         logo_loader=lambda c: team_logo_image(c, logos),
         fonts_dir=here / "fonts",
     )
