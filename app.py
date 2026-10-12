@@ -3005,11 +3005,11 @@ def _methodology_team_rankings():
     st.markdown(
         """
 Every team on one table, for the current regular season, using played games only.
-All figures are averages per game. Click a column header to sort, and switch between
-the raw values and the percentiles.
+Click a column header to sort, and switch between the raw values and the percentiles.
 
 **Ratings.** OffRtg and DefRtg are the points scored and allowed per 100 possessions,
-NetRtg is the difference. Pace is the number of possessions per game.
+NetRtg is the difference. Pace is the number of possessions per game. Each of them is the
+average of the games played so far.
 
 **Four Factors.** eFG% (shooting), TOV% (turnovers per possession), OREB% and DREB%
 (share of the available rebounds), and FT Rate (free throw attempts per field goal attempt),
