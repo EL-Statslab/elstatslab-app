@@ -48,6 +48,48 @@ COLUMNS = [
     ("pace", "Pace", False),
 ]
 
+FOUR_FACTORS_COLUMNS = [
+    ("net_rtg", "NetRtg", True),
+    ("efg", "eFG%", True),
+    ("tov", "TOV%", True),
+    ("oreb", "OREB%", True),
+    ("ftr", "FT Rate", True),
+    ("opp_efg", "Opp eFG%", True),
+    ("opp_tov", "Opp TOV%", True),
+    ("dreb", "DREB%", True),
+    ("opp_ftr", "Opp FT Rate", True),
+]
+
+# Two images for X. "ratings" is the compact one, "four_factors" shows the rest of the table.
+VIEWS = {
+    "ratings": {
+        "width": 1080,
+        "label": "TEAM RANKINGS",
+        "subtitle": "{season} regular season, ratings per 100 possessions, ranked by NetRtg",
+        "columns": COLUMNS,
+        "groups": [],
+        "show_gp": True,
+        "team_w": 384,
+        "head_font": 28,
+        "legend": "Colour shows the percentile among all teams, green is better. Pace is not coloured.",
+        "file": "team_rankings",
+    },
+    "four_factors": {
+        "width": 1440,
+        "label": "FOUR FACTORS",
+        "subtitle": "{season} regular season, ranked by NetRtg",
+        # (title, first column index, last column index) among the metric columns
+        "columns": FOUR_FACTORS_COLUMNS,
+        "groups": [("OFFENSE", 1, 4), ("DEFENSE", 5, 8)],
+        "show_gp": False,
+        "team_w": 340,
+        "head_font": 24,
+        "legend": ("Colour shows the percentile among all teams, green is better. "
+                   "For TOV%, Opp eFG% and Opp FT Rate a lower value is better."),
+        "file": "team_rankings_four_factors",
+    },
+}
+
 
 def _hex_to_rgb(h):
     h = h.lstrip("#")
@@ -231,22 +273,30 @@ def build_team_rankings_png(
     brand_logo=None,
     logo_loader=None,
     fonts_dir=None,
+    view="ratings",
 ):
     """
     values, pct, gp come from team_rankings.compute_team_table.
     names is optional: a function that turns a team code into its display name.
     logo_loader is optional: a function that takes a team code and returns a PIL image or None.
     brand_logo: path or image of the ELSTATSLAB logo, its white background is made transparent.
+    view: "ratings" (NetRtg, OffRtg, DefRtg, Pace) or "four_factors" (the Four Factors table).
     Returns the PNG as bytes.
     """
+    cfg = VIEWS[view]
+    W = cfg["width"]
+    columns = cfg["columns"]
+    groups = cfg["groups"]
+
     order = list(values["net_rtg"].sort_values(ascending=False).index)
     n = len(order)
 
     header_h = 196
+    group_h = 40 if groups else 0
     col_head_h = 54
     legend_h = 50
     footer_h = 112
-    H = header_h + col_head_h + n * ROW_H + legend_h + footer_h
+    H = header_h + group_h + col_head_h + n * ROW_H + legend_h + footer_h
 
     img = Image.new("RGB", (W, H), BEIGE)
     d = ImageDraw.Draw(img)
@@ -273,12 +323,12 @@ def build_team_rankings_png(
             logo_w = 0
     text_x = MARGIN + (logo_w + 30 if logo_w else 0)
 
-    d.text((text_x, 66), "TEAM RANKINGS", font=f("bold", 34), fill=ORANGE, anchor="ls")
+    d.text((text_x, 66), cfg["label"], font=f("bold", 34), fill=ORANGE, anchor="ls")
     title = f"EuroLeague | {round_label}" if round_label else "EuroLeague"
     d.text((text_x, 128), title, font=f("bold", 68), fill=NAVY, anchor="ls")
     d.text(
         (text_x, 162),
-        f"{season_label} regular season, averages per game, ranked by NetRtg",
+        cfg["subtitle"].format(season=season_label),
         font=f("regular", 24),
         fill=NAVY_SOFT,
         anchor="ls",
@@ -287,21 +337,31 @@ def build_team_rankings_png(
 
     # Column geometry
     x0, x1 = MARGIN, W - MARGIN
-    rank_w, team_w, gp_w = 52, 384, 64
-    metric_w = (x1 - x0 - rank_w - team_w - gp_w) / len(COLUMNS)
+    rank_w, team_w = 52, cfg["team_w"]
+    gp_w = 64 if cfg["show_gp"] else 0
+    metric_w = (x1 - x0 - rank_w - team_w - gp_w) / len(columns)
     team_x = x0 + rank_w
     gp_cx = team_x + team_w + gp_w / 2
-    metric_cx = [team_x + team_w + gp_w + metric_w * (i + 0.5) for i in range(len(COLUMNS))]
+    metric_cx = [team_x + team_w + gp_w + metric_w * (i + 0.5) for i in range(len(columns))]
+
+    # Group titles above the columns (OFFENSE / DEFENSE)
+    for title_, first, last in groups:
+        gx0 = metric_cx[first] - metric_w / 2 + 6
+        gx1 = metric_cx[last] + metric_w / 2 - 6
+        gy = header_h + group_h - 12
+        d.text(((gx0 + gx1) / 2, gy - 6), title_, font=f("bold", 26), fill=ORANGE, anchor="ms")
+        d.rectangle([gx0, gy, gx1, gy + 2], fill=ORANGE)
 
     # Table header
-    y_head = header_h + col_head_h / 2 + 4
-    hf = f("bold", 28)
+    y_head = header_h + group_h + col_head_h / 2 + 4
+    hf = f("bold", cfg["head_font"])
     d.text((x0 + 6, y_head), "#", font=hf, fill=NAVY_SOFT, anchor="lm")
     d.text((team_x, y_head), "TEAM", font=hf, fill=NAVY, anchor="lm")
-    d.text((gp_cx, y_head), "GP", font=hf, fill=NAVY, anchor="mm")
-    for cx, (_, label, _) in zip(metric_cx, COLUMNS):
+    if cfg["show_gp"]:
+        d.text((gp_cx, y_head), "GP", font=hf, fill=NAVY, anchor="mm")
+    for cx, (_, label, _) in zip(metric_cx, columns):
         d.text((cx, y_head), label.upper(), font=hf, fill=NAVY, anchor="mm")
-    line_y = header_h + col_head_h
+    line_y = header_h + group_h + col_head_h
     d.rectangle([x0, line_y - 3, x1, line_y], fill=ORANGE)
 
     # Rows
@@ -328,9 +388,10 @@ def build_team_rankings_png(
         name_font = _fit_font(d, label, "bold", 31, team_w - (tx - team_x) - 8, fonts_dir)
         d.text((tx, cy), label, font=name_font, fill=NAVY, anchor="lm")
 
-        d.text((gp_cx, cy), str(int(gp[team])), font=f("semibold", 28), fill=NAVY_SOFT, anchor="mm")
+        if cfg["show_gp"]:
+            d.text((gp_cx, cy), str(int(gp[team])), font=f("semibold", 28), fill=NAVY_SOFT, anchor="mm")
 
-        for cx, (key, _, coloured) in zip(metric_cx, COLUMNS):
+        for cx, (key, _, coloured) in zip(metric_cx, columns):
             val = values.loc[team, key]
             text_rgb = NAVY
             if coloured:
@@ -346,13 +407,7 @@ def build_team_rankings_png(
 
     # Legend
     ly = y + 26
-    d.text(
-        (MARGIN, ly),
-        "Colour shows the percentile among all teams, green is better. Pace is not coloured.",
-        font=f("regular", 23),
-        fill=NAVY_SOFT,
-        anchor="lm",
-    )
+    d.text((MARGIN, ly), cfg["legend"], font=f("regular", 23), fill=NAVY_SOFT, anchor="lm")
 
     # Footer
     fy = H - footer_h + 30
@@ -423,7 +478,9 @@ def team_logo_image(code, logos_dir):
 def main():
     parser = argparse.ArgumentParser(description="Team Rankings PNG for X")
     parser.add_argument("--db", default=None, help="database path, default is euroleague_public.db")
-    parser.add_argument("--out", default=None, help="output PNG path")
+    parser.add_argument("--view", choices=["both", "ratings", "four_factors"], default="both",
+                        help="which image to make, default both")
+    parser.add_argument("--out", default=None, help="output PNG path (only with a single view)")
     args = parser.parse_args()
 
     import team_rankings as tr
@@ -447,16 +504,23 @@ def main():
         conn.close()
 
     label = f"Round {rnd}" if rnd else None
-    png = build_team_rankings_png(
-        values, pct, gp, tr._season_label(season), label,
-        names=lambda c: TEAM_DISPLAY_NAMES.get(c, c),
-        brand_logo=brand if brand.exists() else None,
-        logo_loader=lambda c: team_logo_image(c, logos),
-        fonts_dir=here / "fonts",
-    )
-    out = args.out or f"team_rankings_round_{rnd if rnd else 'x'}.png"
-    Path(out).write_bytes(png)
-    print("Saved", out)
+    views = ["ratings", "four_factors"] if args.view == "both" else [args.view]
+    if args.out and len(views) > 1:
+        print("--out needs a single --view, using the default file names instead.")
+        args.out = None
+
+    for view in views:
+        png = build_team_rankings_png(
+            values, pct, gp, tr._season_label(season), label,
+            names=lambda c: TEAM_DISPLAY_NAMES.get(c, c),
+            brand_logo=brand if brand.exists() else None,
+            logo_loader=lambda c: team_logo_image(c, logos),
+            fonts_dir=here / "fonts",
+            view=view,
+        )
+        out = args.out or f"{VIEWS[view]['file']}_round_{rnd if rnd else 'x'}.png"
+        Path(out).write_bytes(png)
+        print("Saved", out)
 
 
 if __name__ == "__main__":
