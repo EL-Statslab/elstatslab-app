@@ -3161,6 +3161,7 @@ def show_tracking_debug() -> None:
             st.json(st.session_state.get("_gc_info", {}))
 
 
+@st.cache_resource(show_spinner=False)
 def _ranking_logo(code: str):
     """Team logo for the Team Rankings PNG: cropped like the other visuals, so every
     logo can be centred in the same box."""
