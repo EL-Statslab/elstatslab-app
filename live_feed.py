@@ -174,6 +174,19 @@ def build_snapshot(header, boxscore, gamecode=None):
     remaining = _clock_to_seconds(header.get("RemainingPartialTime"))
     elapsed = _elapsed_minutes(quarter, remaining)
 
+    # Between periods (half time, quarter breaks) the Header can report Quarter 0.
+    # Fall back on the minutes played: the five players on court add up to 5 x game time.
+    between_periods = False
+    if live and quarter <= 0:
+        played_seconds = sum(p["seconds"] for p in _players(stats[0])) / 5.0
+        if played_seconds > 0:
+            elapsed = played_seconds / 60.0
+            if elapsed <= 40.0:
+                quarter = max(1, int(-(-round(elapsed, 2) // 10)))
+            else:
+                quarter = 5 + int(-(-round(elapsed - 40.0, 2) // 5)) - 1
+            between_periods = True
+
     a_tot, b_tot = _team_totals(stats[0]), _team_totals(stats[1])
     a_players, b_players = _players(stats[0]), _players(stats[1])
 
@@ -223,6 +236,7 @@ def build_snapshot(header, boxscore, gamecode=None):
         "game_code": gamecode,
         "quarter": quarter,
         "remaining": (header.get("RemainingPartialTime") or "").strip(),
+        "between_periods": between_periods,
         "elapsed_min": round(elapsed, 1),
         "ratings_ready": quarter >= RATINGS_FROM_QUARTER or status == "final",
         "possessions": round(game_poss, 1),
