@@ -87,7 +87,7 @@ COLOR_AWAY = ORANGE
 W, H = 1000, 1250
 FIG_W_IN, FIG_H_IN, DPI = 12, 15, 150
 PT = FIG_W_IN * 72 / W          # points per design unit
-TS_DY = 144                     # extra height (design units) when the Top Scorers block is shown
+TS_DY = 132                     # extra height (design units) when the Top Scorers block is shown
 
 
 def _resolve(p) -> Path:
@@ -420,16 +420,23 @@ def _render(data: dict, round_label: str = "") -> bytes:
         for sc, x0, tc in [(sc_home, 50, COLOR_HOME), (sc_away, 520, COLOR_AWAY)]:
             if not sc:
                 continue
-            cw, cy0, ch = 430, 1014, 80
+            cw, cy0, ch = 430, 1014, 68
             _rbox(ax, x0, cy0, cw, ch, CARD, ec=RULE, r=16, lw=1.0, z=2)
             ax.add_patch(Rectangle((x0 + 16, cy0), cw - 32, 6, facecolor=tc, edgecolor="none", zorder=3))
-            _fit_text(ax, x0 + 24, cy0 + 54, sc["player"], 27, BARLOW_BOLD, NAVY, max_w=cw - 24 - 170)
+            name_x = x0 + 24
+            lp = _team_logo_path(sc.get("team_code"))
+            if lp is not None:
+                crest = _autocrop_rgba(_read_rgba(lp))
+                _image(ax, crest, *_fit(crest, 40, 40, x0 + 24 + 20, cy0 + 37), z=4)
+                name_x = x0 + 24 + 40 + 14
+            _fit_text(ax, name_x, cy0 + 46, sc["player"], 27, BARLOW_BOLD, NAVY,
+                      max_w=(x0 + cw - 150) - name_x)
             ts = sc.get("ts_pct")
             ts_txt = f"{ts:.1f}%" if ts is not None else "n/a"
             for cx_, head, val in ((x0 + cw - 130, "PTS", f"{sc['pts']}"),
                                    (x0 + cw - 56, "TS%", ts_txt)):
-                _text(ax, cx_, cy0 + 30, head, 16, BARLOW_SEMIBOLD, GREY, ha="center")
-                _text(ax, cx_, cy0 + 54, val, 28, BARLOW_BOLD, tc, ha="center")
+                _text(ax, cx_, cy0 + 22, head, 16, BARLOW_SEMIBOLD, GREY, ha="center")
+                _text(ax, cx_, cy0 + 46, val, 28, BARLOW_BOLD, tc, ha="center")
 
     # ── Best 5 by NetRtg ────────────────────────────────────────────────
     _text(ax, 500, 982 + dy, "BEST 5 BY NETRTG", 28, BARLOW_BOLD, NAVY, ha="center")
