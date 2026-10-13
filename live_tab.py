@@ -124,6 +124,8 @@ def _clock_label(snap: dict) -> str:
     if q <= 0:
         return ""
     qname = f"Q{q}" if q <= 4 else f"OT{q - 4}"
+    if snap.get("between_periods"):
+        return f"End of {qname}"
     return f"{qname} {snap.get('remaining', '')}".strip()
 
 
