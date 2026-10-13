@@ -183,9 +183,9 @@ def _autocrop_rgba(img: np.ndarray, strip_sponsor: bool = True) -> np.ndarray:
     return cropped
 
 
-def _read_rgba(path: Path) -> np.ndarray:
+def _read_rgba(path: Path, max_px: int = 900) -> np.ndarray:
     im = Image.open(path).convert("RGBA")
-    im.thumbnail((900, 900), Image.LANCZOS)
+    im.thumbnail((max_px, max_px), Image.LANCZOS)
     return np.asarray(im, dtype=np.float32) / 255.0
 
 
@@ -426,7 +426,7 @@ def _render(data: dict, round_label: str = "") -> bytes:
             name_x = x0 + 24
             lp = _team_logo_path(sc.get("team_code"))
             if lp is not None:
-                crest = _autocrop_rgba(_read_rgba(lp))
+                crest = _autocrop_rgba(_read_rgba(lp, 200))   # small logo, small file in memory
                 _image(ax, crest, *_fit(crest, 40, 40, x0 + 24 + 20, cy0 + 37), z=4)
                 name_x = x0 + 24 + 40 + 14
             _fit_text(ax, name_x, cy0 + 46, sc["player"], 27, BARLOW_BOLD, NAVY,
