@@ -36,6 +36,7 @@ import shotmap_ui
 import lineup_tab
 import team_rankings
 import team_rankings_export
+import live_tab
 
 # =============================================================================
 # CONFIG
@@ -2286,6 +2287,18 @@ def _read_deeplink_once() -> dict:
     return dl
 
 
+def _live_available(g, played: bool, season: int) -> bool:
+    """True when the View live button should be offered for this game."""
+    if played or season != live_tab.LIVE_SEASON:
+        return False
+    try:
+        game_day = pd.to_datetime(g.get("date"), format="%b %d, %Y").date()
+        today = pd.Timestamp.now(tz="Europe/Paris").date()
+        return 0 <= (today - game_day).days <= 1
+    except Exception:
+        return False
+
+
 def render_match_center():
     dl = _read_deeplink_once()
     with st.sidebar:
@@ -2548,6 +2561,24 @@ def render_match_center():
                 score_text, status_text, status_colour, date_str,
                 series_score=series,
             )
+
+            # View live: only for unplayed games of today (or last night, for
+            # games that end after midnight), season 2026 (the live feed season)
+            if _live_available(g, played, int(season)):
+                live_key = f"live_{rnd}_{hcode}_{acode}"
+                live_open = st.session_state.get(live_key, False)
+                live_label = "Hide live (Beta) ▲" if live_open else "🔴 View live (Beta)"
+                if st.button(live_label, key=f"livebtn_{idx}_{rnd}_{hcode}_{acode}",
+                             use_container_width=True, type="primary"):
+                    st.session_state[live_key] = not live_open
+                    st.rerun()
+                if live_open:
+                    live_tab.render_live_panel(
+                        get_conn(),
+                        int(str(g["gamecode"]).split("_")[-1]),
+                        hcode, acode, home_disp, away_disp,
+                        str(g.get("startime") or ""),
+                    )
 
             toggle_key = f"open_{rnd}_{hcode}_{acode}"
             if toggle_key not in st.session_state:
