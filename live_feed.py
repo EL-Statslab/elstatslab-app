@@ -177,6 +177,7 @@ def build_snapshot(header, boxscore, gamecode=None):
     # Between periods (half time, quarter breaks) the Header can report Quarter 0.
     # Fall back on the minutes played: the five players on court add up to 5 x game time.
     between_periods = False
+    clock_known = True
     if quarter <= 0:
         played_seconds = sum(p["seconds"] for p in _players(stats[0])) / 5.0
         if played_seconds > 0:
@@ -185,7 +186,11 @@ def build_snapshot(header, boxscore, gamecode=None):
                 quarter = max(1, int(-(-round(elapsed, 2) // 10)))
             else:
                 quarter = 5 + int(-(-round(elapsed - 40.0, 2) // 5)) - 1
-            between_periods = live  # a finished game is not 'between periods'
+            # Is the game clock at the end of a period (a real break) or in the middle of one?
+            period_end = 10.0 * quarter if quarter <= 4 else 40.0 + 5.0 * (quarter - 4)
+            at_boundary = (period_end - elapsed) <= 0.25
+            between_periods = live and at_boundary
+            clock_known = False  # the feed gave no usable clock: show the period only
 
     a_tot, b_tot = _team_totals(stats[0]), _team_totals(stats[1])
     a_players, b_players = _players(stats[0]), _players(stats[1])
@@ -237,6 +242,7 @@ def build_snapshot(header, boxscore, gamecode=None):
         "quarter": quarter,
         "remaining": (header.get("RemainingPartialTime") or "").strip(),
         "between_periods": between_periods,
+        "clock_known": clock_known,
         "elapsed_min": round(elapsed, 1),
         "ratings_ready": quarter >= RATINGS_FROM_QUARTER or status == "final",
         "possessions": round(game_poss, 1),
