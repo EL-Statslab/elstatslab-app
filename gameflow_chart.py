@@ -1,6 +1,10 @@
 """
 ELSTATSLAB Game Flow PNG export (4:5, 12 x 15 in at 150 dpi = 1800 x 2250 px).
 
+When gameflow_data.top_scorers is filled (Gameflow_generator.py v26), a "TOP SCORERS"
+block (best scorer of each team, PTS and TS%) is added above Best 5 and the image
+gets taller by TS_DY design units. Without that data the layout is exactly the 4:5 one.
+
 New ELSTATSLAB look: warm paper background, deep navy, orange accent, Barlow
 Condensed. Home is navy, away is orange (same pairing as the Matchup win
 probability bar), so the two teams read the same way on every visual.
@@ -83,6 +87,7 @@ COLOR_AWAY = ORANGE
 W, H = 1000, 1250
 FIG_W_IN, FIG_H_IN, DPI = 12, 15, 150
 PT = FIG_W_IN * 72 / W          # points per design unit
+TS_DY = 144                     # extra height (design units) when the Top Scorers block is shown
 
 
 def _resolve(p) -> Path:
@@ -126,6 +131,10 @@ def load_gameflow(gc, s):
     d["runs"] = json.loads(d["runs"])
     d["lineups"] = json.loads(d["lineups"])
     d["periods_series"] = json.loads(d["periods_series"]) if d.get("periods_series") else None
+    try:
+        d["top_scorers"] = json.loads(d["top_scorers"]) if d.get("top_scorers") else []
+    except Exception:
+        d["top_scorers"] = []
     return d
 
 
@@ -229,9 +238,10 @@ def _rbox(ax, x, y, w, h, fc, ec="none", r=14, lw=1.2, z=1):
 
 
 def _image(ax, img, x0, y0, x1, y1, z=4):
+    xl, yl = ax.get_xlim(), ax.get_ylim()
     ax.imshow(img, extent=[x0, x1, y1, y0], zorder=z, interpolation="lanczos")
-    ax.set_xlim(0, W)
-    ax.set_ylim(H, 0)
+    ax.set_xlim(xl)
+    ax.set_ylim(yl)
     ax.set_aspect("auto")
 
 
@@ -296,11 +306,18 @@ def _render(data: dict, round_label: str = "") -> bytes:
     an = dname(ac, data["away_team"])
     fh, fa = data["final_home"], data["final_away"]
 
-    fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, facecolor=PAPER)
+    scorers = data.get("top_scorers") or []
+    sc_home = next((t for t in scorers if t.get("team_code") == hc), None)
+    sc_away = next((t for t in scorers if t.get("team_code") == ac), None)
+    show_scorers = bool(sc_home or sc_away)
+    dy = TS_DY if show_scorers else 0          # everything under the runs block moves down by dy
+    canvas_h = H + dy
+
+    fig = plt.figure(figsize=(FIG_W_IN, FIG_W_IN * canvas_h / W), dpi=DPI, facecolor=PAPER)
     FigureCanvasAgg(fig)  # force the Agg canvas, whatever backend the host picked
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
-    ax.set_ylim(H, 0)
+    ax.set_ylim(canvas_h, 0)
     ax.axis("off")
 
     # ── Title bar ───────────────────────────────────────────────────────
@@ -397,15 +414,32 @@ def _render(data: dict, round_label: str = "") -> bytes:
     else:
         _text(ax, 500, 830, "No runs of 9 points or more detected", 22, BARLOW_REGULAR, GREY, ha="center")
 
+    # ── Top scorers (best scorer of each team, PTS and TS%) ─────────────
+    if show_scorers:
+        _text(ax, 500, 982, "TOP SCORERS", 28, BARLOW_BOLD, NAVY, ha="center")
+        for sc, x0, tc in [(sc_home, 50, COLOR_HOME), (sc_away, 520, COLOR_AWAY)]:
+            if not sc:
+                continue
+            cw, cy0, ch = 430, 1014, 80
+            _rbox(ax, x0, cy0, cw, ch, CARD, ec=RULE, r=16, lw=1.0, z=2)
+            ax.add_patch(Rectangle((x0 + 16, cy0), cw - 32, 6, facecolor=tc, edgecolor="none", zorder=3))
+            _fit_text(ax, x0 + 24, cy0 + 54, sc["player"], 27, BARLOW_BOLD, NAVY, max_w=cw - 24 - 170)
+            ts = sc.get("ts_pct")
+            ts_txt = f"{ts:.1f}%" if ts is not None else "n/a"
+            for cx_, head, val in ((x0 + cw - 130, "PTS", f"{sc['pts']}"),
+                                   (x0 + cw - 56, "TS%", ts_txt)):
+                _text(ax, cx_, cy0 + 30, head, 16, BARLOW_SEMIBOLD, GREY, ha="center")
+                _text(ax, cx_, cy0 + 54, val, 28, BARLOW_BOLD, tc, ha="center")
+
     # ── Best 5 by NetRtg ────────────────────────────────────────────────
-    _text(ax, 500, 982, "BEST 5 BY NETRTG", 28, BARLOW_BOLD, NAVY, ha="center")
+    _text(ax, 500, 982 + dy, "BEST 5 BY NETRTG", 28, BARLOW_BOLD, NAVY, ha="center")
     for lu, x0, tc in [
         (next((l for l in lineups if l["team_code"] == hc), None), 50, COLOR_HOME),
         (next((l for l in lineups if l["team_code"] == ac), None), 520, COLOR_AWAY),
     ]:
         if not lu:
             continue
-        cw, cy0, ch = 430, 1014, 148
+        cw, cy0, ch = 430, 1014 + dy, 148
         _rbox(ax, x0, cy0, cw, ch, CARD, ec=RULE, r=16, lw=1.0, z=2)
         ax.add_patch(Rectangle((x0 + 16, cy0), cw - 32, 6, facecolor=tc, edgecolor="none", zorder=3))
         cx = x0 + cw / 2
@@ -421,11 +455,11 @@ def _render(data: dict, round_label: str = "") -> bytes:
             _fit_text(ax, cx, cy0 + 130, l2, 22, BARLOW_REGULAR, NAVY, max_w=cw - 30, ha="center")
 
     # ── Footer ──────────────────────────────────────────────────────────
-    ax.plot([50, 950], [1172, 1172], color=NAVY, lw=1.6, zorder=2)
-    _text(ax, 50, 1198, "DataViz By EL_STATSLAB", 25, BARLOW_BOLD, NAVY)
-    _text(ax, 50, 1224, "Insights, Trends, Metrics, Dataviz", 19, BARLOW_SEMIBOLD, ORANGE)
-    _text(ax, 950, 1198, "X @EL_Statslab", 25, BARLOW_BOLD, NAVY, ha="right")
-    _text(ax, 950, 1224, "elstatslab.com", 19, BARLOW_REGULAR, GREY, ha="right")
+    ax.plot([50, 950], [1172 + dy, 1172 + dy], color=NAVY, lw=1.6, zorder=2)
+    _text(ax, 50, 1198 + dy, "DataViz By EL_STATSLAB", 25, BARLOW_BOLD, NAVY)
+    _text(ax, 50, 1224 + dy, "Insights, Trends, Metrics, Dataviz", 19, BARLOW_SEMIBOLD, ORANGE)
+    _text(ax, 950, 1198 + dy, "X @EL_Statslab", 25, BARLOW_BOLD, NAVY, ha="right")
+    _text(ax, 950, 1224 + dy, "elstatslab.com", 19, BARLOW_REGULAR, GREY, ha="right")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", facecolor=PAPER, dpi=DPI)
