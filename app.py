@@ -2291,6 +2291,28 @@ LIVE_OPENS_BEFORE_MIN = 60     # the View live button appears one hour before ti
 LIVE_STAYS_AFTER_HOURS = 18    # and stays until the game is imported (played = true)
 
 
+def _live_block_impl(idx, rnd, hcode, acode, home_disp, away_disp, gamecode, start_label):
+    """View live button + panel + export. Runs as a fragment: opening or closing
+    the live view reruns only this block, not the whole page."""
+    live_key = f"live_{rnd}_{hcode}_{acode}"
+    live_open = st.session_state.get(live_key, False)
+    live_label = "Hide live (Beta) ▲" if live_open else "🔴 View live (Beta)"
+    if st.button(live_label, key=f"livebtn_{idx}_{rnd}_{hcode}_{acode}",
+                 use_container_width=True, type="primary"):
+        live_open = not live_open
+        st.session_state[live_key] = live_open
+        st.rerun(scope="fragment")
+    if live_open:
+        live_tab.render_live_panel(
+            get_conn(), gamecode, hcode, acode, home_disp, away_disp, start_label)
+        live_tab.render_export_button(
+            get_conn(), gamecode, hcode, acode, home_disp, away_disp,
+            f"{rnd}_{hcode}_{acode}")
+
+
+_live_block = st.fragment(_live_block_impl) if hasattr(st, "fragment") else _live_block_impl
+
+
 def _tipoff_passed(g) -> bool:
     """True once the scheduled tip off time (Paris time) has passed."""
     try:
@@ -2560,7 +2582,9 @@ def render_match_center():
             # Once the game has tipped off, show the real state from the live feed
             if _live_available(g, played, int(season)) and _tipoff_passed(g):
                 try:
+                    _t_snap = _time.perf_counter()
                     _snap = live_tab.cached_snapshot(int(str(g["gamecode"]).split("_")[-1]))
+                    print(f"[perf] card live status {hcode}-{acode}: {_time.perf_counter() - _t_snap:.2f} s", flush=True)
                     if _snap.get("status") == "live":
                         status_text, status_colour = "Live", "#E53935"
                     elif _snap.get("status") == "final":
@@ -2601,26 +2625,11 @@ def render_match_center():
             # View live: only for unplayed games of today (or last night, for
             # games that end after midnight), season 2026 (the live feed season)
             if _live_available(g, played, int(season)):
-                live_key = f"live_{rnd}_{hcode}_{acode}"
-                live_open = st.session_state.get(live_key, False)
-                live_label = "Hide live (Beta) ▲" if live_open else "🔴 View live (Beta)"
-                if st.button(live_label, key=f"livebtn_{idx}_{rnd}_{hcode}_{acode}",
-                             use_container_width=True, type="primary"):
-                    st.session_state[live_key] = not live_open
-                    st.rerun()
-                if live_open:
-                    live_tab.render_live_panel(
-                        get_conn(),
-                        int(str(g["gamecode"]).split("_")[-1]),
-                        hcode, acode, home_disp, away_disp,
-                        str(g.get("startime") or ""),
-                    )
-                    live_tab.render_export_button(
-                        get_conn(),
-                        int(str(g["gamecode"]).split("_")[-1]),
-                        hcode, acode, home_disp, away_disp,
-                        f"{rnd}_{hcode}_{acode}",
-                    )
+                _live_block(
+                    idx, rnd, hcode, acode, home_disp, away_disp,
+                    int(str(g["gamecode"]).split("_")[-1]),
+                    str(g.get("startime") or ""),
+                )
 
             toggle_key = f"open_{rnd}_{hcode}_{acode}"
             if toggle_key not in st.session_state:
@@ -3247,7 +3256,22 @@ def _ranking_logo(code: str):
         return None
 
 
+import time as _time
+from contextlib import contextmanager
+
+
+@contextmanager
+def _perf(name):
+    """Prints how long a block takes to the app logs (Manage app)."""
+    t0 = _time.perf_counter()
+    try:
+        yield
+    finally:
+        print(f"[perf] {name}: {_time.perf_counter() - t0:.2f} s", flush=True)
+
+
 def main():
+    _t_main = _time.perf_counter()
     track_visit_once()
     show_tracking_debug()
     st.markdown(
@@ -3274,49 +3298,78 @@ def main():
         st.title("ELSTATSLAB")
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
 
-    tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_method = st.tabs(
-        ["📊 Match Center", "🛡️ Team Cards", "📈 Team Rankings", "🎯 Shot Maps",
-         "🧩 Lineup", "📖 Methodology"]
-    )
+    _tab_labels = ["📊 Match Center", "🛡️ Team Cards", "📈 Team Rankings", "🎯 Shot Maps",
+                   "🧩 Lineup", "📖 Methodology"]
+    # Lazy tabs: only the selected tab is computed (much faster first load).
+    # Falls back to the old behaviour (all tabs computed) if this Streamlit
+    # version does not support it.
+    try:
+        tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_method = st.tabs(
+            _tab_labels, on_change="rerun", key="main_tabs")
+        _lazy_tabs = True
+    except TypeError:
+        tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_method = st.tabs(_tab_labels)
+        _lazy_tabs = False
+
+    def _tab_is_open(tab) -> bool:
+        if not _lazy_tabs:
+            return True
+        try:
+            return bool(tab.open)
+        except Exception:
+            return True
 
     with tab_match:
         st.caption("Compare any EuroLeague matchup.")
-        render_match_center()
+        if _tab_is_open(tab_match):
+            with _perf("match center"):
+                render_match_center()
 
     with tab_cards:
-        team_cards.render()
+        if _tab_is_open(tab_cards):
+            with _perf("team cards"):
+                team_cards.render()
 
     with tab_rankings:
-        team_rankings.render_team_rankings(
-            get_conn(),
-            name_fn=lambda c: display_name(c, c),
-            logo_loader=_ranking_logo,
-            brand_logo=ELSTATSLAB_LOGO if ELSTATSLAB_LOGO.exists() else None,
-        )
+        if _tab_is_open(tab_rankings):
+            with _perf("team rankings"):
+                team_rankings.render_team_rankings(
+                    get_conn(),
+                    name_fn=lambda c: display_name(c, c),
+                    logo_loader=_ranking_logo,
+                    brand_logo=ELSTATSLAB_LOGO if ELSTATSLAB_LOGO.exists() else None,
+                )
 
     with tab_shots:
-        if SHOTMAPS_TAB:
-            shotmap_ui.render_shot_maps_tab(
-                conn=get_conn(),
-                seasons=load_seasons(),
-                name_fn=lambda c: display_name(c, c),
-                elstatslab_logo=ELSTATSLAB_LOGO,
-                team_logo_fn=logo_path,
-            )
-        else:
-            st.info("Shot Maps are temporarily unavailable.")
+        if _tab_is_open(tab_shots):
+            with _perf("shot maps"):
+                if SHOTMAPS_TAB:
+                    shotmap_ui.render_shot_maps_tab(
+                        conn=get_conn(),
+                        seasons=load_seasons(),
+                        name_fn=lambda c: display_name(c, c),
+                        elstatslab_logo=ELSTATSLAB_LOGO,
+                        team_logo_fn=logo_path,
+                    )
+                else:
+                    st.info("Shot Maps are temporarily unavailable.")
 
     with tab_lineup:
-        lineup_tab.render_lineup_tab(
-            conn=get_conn(),
-            seasons=load_seasons(),
-            name_fn=lambda c: display_name(c, c),
-            elstatslab_logo=ELSTATSLAB_LOGO,
-            team_logo_fn=logo_path,
-        )
+        if _tab_is_open(tab_lineup):
+            with _perf("lineup"):
+                lineup_tab.render_lineup_tab(
+                    conn=get_conn(),
+                    seasons=load_seasons(),
+                    name_fn=lambda c: display_name(c, c),
+                    elstatslab_logo=ELSTATSLAB_LOGO,
+                    team_logo_fn=logo_path,
+                )
 
     with tab_method:
-        render_methodology()
+        if _tab_is_open(tab_method):
+            render_methodology()
+
+    print(f"[perf] page total: {_time.perf_counter() - _t_main:.2f} s", flush=True)
 
 
 if __name__ == "__main__":
