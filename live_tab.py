@@ -46,6 +46,12 @@ def cached_snapshot(gamecode: int) -> dict:
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def cached_game_info(gamecode: int) -> dict:
+    """Venue, capacity and referees. Changes rarely, so a long cache."""
+    return live_feed.get_game_info(int(gamecode))
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def season_reference(_conn, season: int) -> dict:
     """Season averages per team code, same formulas as the Match Center."""
     q = """
@@ -255,6 +261,33 @@ def _fouls_html(team):
 # Panel
 # ----------------------------------------------------------------------------
 
+def _pregame_info(info: dict) -> None:
+    """Venue, capacity and referees, only what the official sheet really contains."""
+    if not info:
+        return
+    rows = ""
+    if info.get("venue"):
+        rows += (f"<div><span style='opacity:0.65;'>Venue</span> "
+                 f"<span style='font-weight:700;'>{escape(info['venue'])}</span></div>")
+    if info.get("capacity"):
+        rows += (f"<div><span style='opacity:0.65;'>Capacity</span> "
+                 f"<span style='font-weight:700;'>{int(info['capacity']):,}</span></div>")
+    refs = info.get("referees") or []
+    if refs:
+        names = "".join(
+            f"<div style='font-weight:700;'>{escape(r['name'])}"
+            f"<span style='font-weight:400;opacity:0.65;'>"
+            f"{' (' + escape(r['country']) + ')' if r.get('country') else ''}</span></div>"
+            for r in refs
+        )
+        rows += f"<div style='margin-top:6px;'><span style='opacity:0.65;'>Referees</span>{names}</div>"
+    else:
+        rows += "<div style='margin-top:6px;opacity:0.65;'>Referees not announced yet</div>"
+    _section_title("Game information")
+    st.markdown(f"<div style='font-size:0.95rem;line-height:1.5;'>{rows}</div>",
+                unsafe_allow_html=True)
+
+
 def _panel(conn, gamecode, hcode, acode, home_disp, away_disp, start_label):
     snap = cached_snapshot(int(gamecode))
     status = snap.get("status")
@@ -266,6 +299,7 @@ def _panel(conn, gamecode, hcode, acode, home_disp, away_disp, start_label):
     if status == "pre":
         when = f" Tip off: {escape(start_label)}." if start_label else ""
         _note(f"The game has not started yet.{when} This view fills in as soon as the game begins.")
+        _pregame_info(cached_game_info(int(gamecode)))
         return
 
     # Make sure the home side of the feed is the home side of the schedule
