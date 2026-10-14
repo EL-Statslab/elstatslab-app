@@ -2287,14 +2287,22 @@ def _read_deeplink_once() -> dict:
     return dl
 
 
+LIVE_OPENS_BEFORE_MIN = 60     # the View live button appears one hour before tip off
+LIVE_STAYS_AFTER_HOURS = 18    # and stays until the game is imported (played = true)
+
+
 def _live_available(g, played: bool, season: int) -> bool:
     """True when the View live button should be offered for this game."""
     if played or season != live_tab.LIVE_SEASON:
         return False
     try:
-        game_day = pd.to_datetime(g.get("date"), format="%b %d, %Y").date()
-        today = pd.Timestamp.now(tz="Europe/Paris").date()
-        return 0 <= (today - game_day).days <= 1
+        tz = "Europe/Paris"
+        day = pd.to_datetime(g.get("date"), format="%b %d, %Y")
+        hhmm = str(g.get("startime") or "").strip()
+        tip = pd.Timestamp(f"{day.strftime('%Y-%m-%d')} {hhmm}").tz_localize(tz)
+        now = pd.Timestamp.now(tz=tz)
+        return (tip - pd.Timedelta(minutes=LIVE_OPENS_BEFORE_MIN)) <= now <= (
+            tip + pd.Timedelta(hours=LIVE_STAYS_AFTER_HOURS))
     except Exception:
         return False
 
