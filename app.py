@@ -2565,6 +2565,12 @@ def render_match_center():
                         status_text, status_colour = "Live", "#E53935"
                     elif _snap.get("status") == "final":
                         status_text, status_colour = "Final", "#2ea043"
+                        # Final score from the live feed, until the database is updated
+                        _t = _snap.get("teams") or []
+                        if len(_t) == 2:
+                            if _t[0].get("code") == acode and _t[1].get("code") == hcode:
+                                _t = [_t[1], _t[0]]
+                            score_text = f"{int(_t[0]['score'])} — {int(_t[1]['score'])}"
                 except Exception:
                     pass
 
@@ -2608,6 +2614,12 @@ def render_match_center():
                         int(str(g["gamecode"]).split("_")[-1]),
                         hcode, acode, home_disp, away_disp,
                         str(g.get("startime") or ""),
+                    )
+                    live_tab.render_export_button(
+                        get_conn(),
+                        int(str(g["gamecode"]).split("_")[-1]),
+                        hcode, acode, home_disp, away_disp,
+                        f"{rnd}_{hcode}_{acode}",
                     )
 
             toggle_key = f"open_{rnd}_{hcode}_{acode}"
