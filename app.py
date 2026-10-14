@@ -2291,6 +2291,18 @@ LIVE_OPENS_BEFORE_MIN = 60     # the View live button appears one hour before ti
 LIVE_STAYS_AFTER_HOURS = 18    # and stays until the game is imported (played = true)
 
 
+def _tipoff_passed(g) -> bool:
+    """True once the scheduled tip off time (Paris time) has passed."""
+    try:
+        tz = "Europe/Paris"
+        day = pd.to_datetime(g.get("date"), format="%b %d, %Y")
+        hhmm = str(g.get("startime") or "").strip()
+        tip = pd.Timestamp(f"{day.strftime('%Y-%m-%d')} {hhmm}").tz_localize(tz)
+        return pd.Timestamp.now(tz=tz) >= tip
+    except Exception:
+        return False
+
+
 def _live_available(g, played: bool, season: int) -> bool:
     """True when the View live button should be offered for this game."""
     if played or season != live_tab.LIVE_SEASON:
@@ -2545,6 +2557,16 @@ def render_match_center():
         else:
             status_text = "Upcoming"
             status_colour = "#1e88e5"
+            # Once the game has tipped off, show the real state from the live feed
+            if _live_available(g, played, int(season)) and _tipoff_passed(g):
+                try:
+                    _snap = live_tab.cached_snapshot(int(str(g["gamecode"]).split("_")[-1]))
+                    if _snap.get("status") == "live":
+                        status_text, status_colour = "Live", "#E53935"
+                    elif _snap.get("status") == "final":
+                        status_text, status_colour = "Final", "#2ea043"
+                except Exception:
+                    pass
 
         game_date = g.get("date")
         if pd.notna(game_date):
