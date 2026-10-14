@@ -106,6 +106,55 @@ def fetch_raw(gamecode, season=SEASON_CODE):
 
 
 # ----------------------------------------------------------------------------
+# Pre game information (venue, capacity, referees)
+# ----------------------------------------------------------------------------
+
+GAME_SHEET_URL = "https://api-live.euroleague.net/v2/competitions/E/seasons/{season}/games/{gamecode}"
+
+
+def _title_name(raw):
+    """'CORTES, CARLOS' -> 'Carlos Cortes'."""
+    raw = (raw or "").strip()
+    if "," in raw:
+        last, first = [x.strip() for x in raw.split(",", 1)]
+        raw = f"{first} {last}"
+    return raw.title()
+
+
+def build_game_info(sheet):
+    """Venue and referees from the official game sheet. Missing data stays missing."""
+    if not isinstance(sheet, dict):
+        return {}
+    venue = sheet.get("venue") or {}
+    referees = []
+    for key in ("referee1", "referee2", "referee3"):
+        ref = sheet.get(key)
+        if isinstance(ref, dict) and ref.get("name"):
+            referees.append({
+                "name": _title_name(ref.get("name")),
+                "country": ((ref.get("country") or {}).get("name") or "").strip(),
+            })
+    return {
+        "venue": (venue.get("name") or "").strip().title(),
+        "capacity": venue.get("capacity") or None,
+        "referees": referees,
+    }
+
+
+def get_game_info(gamecode, season=SEASON_CODE):
+    """Never raises. Returns {} when the sheet is not reachable."""
+    try:
+        response = requests.get(
+            GAME_SHEET_URL.format(season=season, gamecode=gamecode),
+            headers=HEADERS, timeout=TIMEOUT,
+        )
+        response.raise_for_status()
+        return build_game_info(response.json())
+    except Exception:
+        return {}
+
+
+# ----------------------------------------------------------------------------
 # Building the snapshot
 # ----------------------------------------------------------------------------
 
