@@ -25,6 +25,7 @@ import pandas as pd
 import streamlit as st
 
 import live_feed
+import live_export
 
 REFRESH_SECONDS = 20
 LIVE_SEASON = 2026          # the live feed (E2026) only exists for this season
@@ -355,3 +356,32 @@ def render_live_panel(conn, gamecode, hcode, acode, home_disp, away_disp, start_
         _panel_live(conn, int(gamecode), hcode, acode, home_disp, away_disp, start_label)
     except Exception:
         _note("The live view is temporarily unavailable.")
+
+
+def render_export_button(conn, gamecode, hcode, acode, home_disp, away_disp, key):
+    """Export button: builds a PNG of the live view at the moment of the click.
+    Never raises. Shown only once the game has started."""
+    try:
+        png_key = f"live_png_{key}"
+        if st.button("Export live image", key=f"live_exp_{key}", use_container_width=True):
+            snap = cached_snapshot(int(gamecode))
+            if snap.get("status") in ("live", "final"):
+                ref = season_reference(conn, LIVE_SEASON)
+                st.session_state[png_key] = live_export.build_live_png(
+                    snap, home_disp, away_disp, ref.get(hcode, {}), ref.get(acode, {}),
+                    hcode, acode)
+                st.session_state[png_key + "_at"] = datetime.now(LOCAL_TZ).strftime("%H:%M")
+            else:
+                st.session_state.pop(png_key, None)
+                st.caption("The game has not started yet, nothing to export.")
+        if png_key in st.session_state:
+            st.download_button(
+                label=f"📥 Download image (captured {st.session_state.get(png_key + '_at', '')})",
+                data=st.session_state[png_key],
+                file_name=f"ELSTATSLAB_Live_{hcode}_vs_{acode}.png",
+                mime="image/png",
+                key=f"live_dl_{key}",
+                use_container_width=True,
+            )
+    except Exception:
+        st.caption("The export is temporarily unavailable.")
