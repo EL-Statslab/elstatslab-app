@@ -226,6 +226,34 @@ def get_conn():
     return sqlite3.connect(uri, uri=True, check_same_thread=False)
 
 
+@st.cache_resource
+def _db_state() -> dict:
+    """Process wide memo of the database file version (survives reruns)."""
+    return {"mtime": None}
+
+
+def refresh_if_db_changed() -> None:
+    """When the database file is replaced (new upload on GitHub), drop the old
+    connection and all cached query results, so visitors see the new data on the
+    next page load instead of waiting for a manual app reboot."""
+    try:
+        mtime = Path(DB_PATH).stat().st_mtime
+    except Exception:
+        return
+    state = _db_state()
+    if state["mtime"] is None:
+        state["mtime"] = mtime
+        return
+    if mtime != state["mtime"]:
+        state["mtime"] = mtime
+        try:
+            st.cache_data.clear()
+            get_conn.clear()
+        except Exception:
+            pass
+        print("[db] database file changed, caches cleared", flush=True)
+
+
 @st.cache_data(ttl=600)
 def load_seasons() -> list[int]:
     return [2026, 2025]
@@ -2296,7 +2324,7 @@ def _live_block_impl(idx, rnd, hcode, acode, home_disp, away_disp, gamecode, sta
     the live view reruns only this block, not the whole page."""
     live_key = f"live_{rnd}_{hcode}_{acode}"
     live_open = st.session_state.get(live_key, False)
-    live_label = "Hide live (Beta) ▲" if live_open else "🔴 View live (Beta)"
+    live_label = "Hide live ▲" if live_open else "🔴 View live"
     if st.button(live_label, key=f"livebtn_{idx}_{rnd}_{hcode}_{acode}",
                  use_container_width=True, type="primary"):
         live_open = not live_open
@@ -2565,6 +2593,7 @@ def render_match_center():
         played = g["played"] == "true"
 
         score_text = None
+        post_pending = False
         if played:
             match_row = all_games[
                 (all_games["gameday"] == int(rnd)) &
@@ -2579,6 +2608,7 @@ def render_match_center():
         else:
             status_text = "Upcoming"
             status_colour = "#1e88e5"
+            post_pending = False
             # Once the game has tipped off, show the real state from the live feed
             if _live_available(g, played, int(season)) and _tipoff_passed(g):
                 try:
@@ -2589,6 +2619,7 @@ def render_match_center():
                         status_text, status_colour = "Live", "#E53935"
                     elif _snap.get("status") == "final":
                         status_text, status_colour = "Final", "#2ea043"
+                        post_pending = True
                         # Final score from the live feed, until the database is updated
                         _t = _snap.get("teams") or []
                         if len(_t) == 2:
@@ -2636,14 +2667,24 @@ def render_match_center():
                 st.session_state[toggle_key] = False
 
             is_open = st.session_state[toggle_key]
-            btn_label = "Hide analysis ▲" if is_open else "View analysis ▼"
+            if post_pending:
+                # Game over according to the live feed, database not updated yet
+                st.button("Post game analysis pending",
+                          key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
+                          use_container_width=True, disabled=True)
+                is_open = False
+            else:
+                if played:
+                    btn_label = ("Hide post game analysis ▲" if is_open
+                                 else "View post game analysis ▼")
+                else:
+                    btn_label = "Hide analysis ▲" if is_open else "View analysis ▼"
+                if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
+                             use_container_width=True):
+                    st.session_state[toggle_key] = not is_open
+                    st.rerun()
 
-            if st.button(btn_label, key=f"toggle_{idx}_{rnd}_{hcode}_{acode}",
-                         use_container_width=True):
-                st.session_state[toggle_key] = not is_open
-                st.rerun()
-
-            if st.session_state[toggle_key]:
+            if st.session_state[toggle_key] and not post_pending:
                 st.divider()
                 render_match_analysis(
                     g, int(rnd), all_games, phase, round_label_long,
@@ -3272,6 +3313,7 @@ def _perf(name):
 
 def main():
     _t_main = _time.perf_counter()
+    refresh_if_db_changed()
     track_visit_once()
     show_tracking_debug()
     st.markdown(
