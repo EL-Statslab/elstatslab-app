@@ -26,6 +26,10 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+
+# Cache duration for queries derived from the database. Caches are cleared as soon as the
+# database file changes (refresh_if_db_changed), so a long duration is safe.
+DB_TTL = 6 * 3600
 from matplotlib.gridspec import GridSpec
 from matplotlib import font_manager
 from PIL import Image
@@ -154,7 +158,7 @@ def logo_path(code: str) -> Path | None:
     return p if p.exists() else None
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=DB_TTL)
 def logo_b64(code: str) -> str | None:
     """Cropped, square, white background crest (same footprint for every club)."""
     lp = logo_path(code)
@@ -205,7 +209,7 @@ def _autocrop_logo(img_arr):
 # =============================================================================
 # GAMEFLOW
 # =============================================================================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=DB_TTL)
 def get_gameflow_png(gamecode: int, season: int, round_label: str = "",
                      aspect: str = "square") -> bytes | None:
     try:
@@ -254,18 +258,18 @@ def refresh_if_db_changed() -> None:
         print("[db] database file changed, caches cleared", flush=True)
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_seasons() -> list[int]:
     return [2026, 2025]
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_rounds(season: int) -> list[int]:
     q = "SELECT DISTINCT gameday FROM schedule WHERE Season = ? ORDER BY gameday"
     return pd.read_sql(q, get_conn(), params=(season,))["gameday"].tolist()
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_all_schedule(season: int) -> pd.DataFrame:
     q = """
         SELECT gameday, round AS phase
@@ -276,7 +280,7 @@ def load_all_schedule(season: int) -> pd.DataFrame:
     return pd.read_sql(q, get_conn(), params=(season,))
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_official_standings() -> pd.DataFrame | None:
     try:
         return pd.read_sql("SELECT * FROM standings_official", get_conn())
@@ -284,7 +288,7 @@ def load_official_standings() -> pd.DataFrame | None:
         return None
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_playoffs_schedule(season: int) -> pd.DataFrame:
     q = """
         SELECT gameday, hometeam, homecode, awayteam, awaycode, played
@@ -370,7 +374,7 @@ def orient_series(raw_series: dict | None, hcode: str) -> dict | None:
     }
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_matchday(season: int, gameday: int) -> pd.DataFrame:
     q = """
         SELECT gamecode, date, startime, round AS phase,
@@ -382,7 +386,7 @@ def load_matchday(season: int, gameday: int) -> pd.DataFrame:
     return pd.read_sql(q, get_conn(), params=(season, gameday))
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_team_games(season: int) -> pd.DataFrame:
     q = """
         SELECT
@@ -978,7 +982,7 @@ def _monte_carlo_win_prob(conn, ctx: dict) -> dict:
     }
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=DB_TTL)
 def _predict_legacy(gamecode: int, season: int) -> dict:
     conn = get_conn()
     ctx = _get_match_context(conn, gamecode, season)
@@ -1226,7 +1230,7 @@ def v5_predict_match(conn, season, hcode, acode):
 # =============================================================================
 # DISPATCHER: version 5 for regular season games, previous model otherwise
 # =============================================================================
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=DB_TTL)
 def predict_by_gamecode(gamecode: int, season: int) -> dict:
     conn = get_conn()
     row = conn.execute("""
@@ -1775,7 +1779,7 @@ IP_METRIC_COLS = {
 }
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=DB_TTL)
 def load_impact_pulse(gamecode: int, season: int) -> pd.DataFrame:
     try:
         q = """
