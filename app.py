@@ -3382,7 +3382,11 @@ def render_return_invite() -> None:
         "<div style='margin-top:10px;font-size:.95rem;color:#14213D;'>"
         "<a href='https://x.com/EL_Statslab' target='_blank' "
         "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
-        "Follow @EL_Statslab on X</a> for the visuals behind the numbers."
+        "Follow @EL_Statslab on X</a> for the visuals behind the numbers, or "
+        "<a href='https://elstatslab.substack.com/p/elstatslab-is-an-independent-analytics' "
+        "target='_blank' "
+        "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
+        "read the story behind the project on Substack</a>."
         "</div></div>",
         unsafe_allow_html=True,
     )
