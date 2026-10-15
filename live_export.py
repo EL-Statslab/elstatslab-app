@@ -217,7 +217,7 @@ def build_live_png(snap: dict, home_disp: str, away_disp: str,
 
     # Footer
     stamp = datetime.fromtimestamp(snap.get("updated", 0), LOCAL_TZ).strftime("%H:%M")
-    _text(d, (56, 1326), f"Live figures, captured at {stamp} Paris time. Beta.", _font("reg", 22), GREY, "ls")
+    _text(d, (56, 1326), f"Live figures, captured at {stamp} Paris time.", _font("reg", 22), GREY, "ls")
     _text(d, (W - 56, 1326), "elstatslab.com", _font("bold", 26), ORANGE, "rs")
 
     buf = io.BytesIO()
