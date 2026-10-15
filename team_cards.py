@@ -1,5 +1,5 @@
 """
-ELSTATSLAB — Team Cards (module)
+ELSTATSLAB Team Cards (module)
 ==================================
 Module importé par app.py sous l'onglet "Team Cards" (st.tabs).
 Grille de logos cliquable (style papier, aligne sur l'export) des 20 équipes EuroLeague, carte de stats
@@ -386,7 +386,8 @@ _TC_CSS = """<style>
  gap:24px;margin:6px 0 16px;}
 .tc-crest{width:104px;height:104px;border-radius:20px;background:#fff;flex:0 0 auto;display:block;}
 .tc-bn{flex:1;min-width:0;}
-.tc-bn .n{font-size:2.6rem;font-weight:700;color:#F3EEE4;line-height:1.05;}
+.tc-bn .n{font-size:2.6rem;font-weight:700;color:#F3EEE4;line-height:1.05;
+ overflow-wrap:normal;word-break:normal;hyphens:manual;}
 .tc-bn .s{font-size:1.2rem;color:#B9BFCC;margin-top:6px;}
 .tc-gp{background:#E4572E;color:#fff;font-weight:700;letter-spacing:.06em;font-size:1rem;
  padding:10px 22px;border-radius:999px;white-space:nowrap;}
@@ -427,8 +428,13 @@ _TC_CSS = """<style>
 @media (max-width:760px){
  .tc-hdr,.tc-row{grid-template-columns:96px 74px 1fr;}
  .tc-row .lb{font-size:.95rem;} .tc-row .vl{font-size:1.2rem;}
- .tc-banner{flex-wrap:wrap;padding:16px;} .tc-bn .n{font-size:1.8rem;}
- .tc-crest{width:76px;height:76px;} .tc-hl{grid-template-columns:1fr;}
+ .tc-banner{flex-wrap:wrap;padding:16px;gap:14px 16px;}
+ .tc-bn{flex:1 1 0;min-width:0;}
+ .tc-bn .n{font-size:1.7rem;}
+ .tc-bn .s{font-size:1rem;}
+ .tc-crest{width:76px;height:76px;}
+ .tc-gp{flex:0 0 100%;box-sizing:border-box;text-align:center;}
+ .tc-hl{grid-template-columns:1fr;}
 }
 </style>"""
 
