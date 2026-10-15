@@ -3366,6 +3366,28 @@ def _perf(name):
         print(f"[perf] {name}: {_time.perf_counter() - t0:.2f} s", flush=True)
 
 
+def render_return_invite() -> None:
+    """Small card at the bottom of every tab inviting visitors to come back."""
+    st.markdown(
+        "<div style='max-width:820px;margin:28px auto 8px auto;padding:18px 22px;"
+        "background:#FBF8F1;border:1px solid #E1D8C6;border-left:5px solid #E4572E;"
+        "border-radius:14px;'>"
+        "<div style='font-weight:700;font-size:1.15rem;color:#14213D;'>"
+        "Come back every round</div>"
+        "<div style='margin-top:6px;font-size:1rem;color:#14213D;line-height:1.45;'>"
+        "New analyses are added after every EuroLeague round. Bookmark this page "
+        "(Ctrl+D on a computer, or the share menu on your phone) so you can find it again. "
+        "The site is always free and always ad free."
+        "</div>"
+        "<div style='margin-top:10px;font-size:.95rem;color:#14213D;'>"
+        "<a href='https://x.com/EL_Statslab' target='_blank' "
+        "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
+        "Follow @EL_Statslab on X</a> for the visuals behind the numbers."
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
 def main():
     _t_main = _time.perf_counter()
     refresh_if_db_changed()
@@ -3465,6 +3487,8 @@ def main():
     with tab_method:
         if _tab_is_open(tab_method):
             render_methodology()
+
+    render_return_invite()
 
     print(f"[perf] page total: {_time.perf_counter() - _t_main:.2f} s", flush=True)
 
