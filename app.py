@@ -2184,7 +2184,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         )
 
         # ── Lineups ───────────────────────────────────────────────────────
-        if LINEUPS_IN_MATCH:
+        if LINEUPS_IN_MATCH and hasattr(lineup_tab, "render_match_lineups"):
             lineup_tab.render_match_lineups(
                 conn=get_conn(),
                 season=rnd_season,
@@ -2201,7 +2201,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             )
 
         # ── Shot Map ──────────────────────────────────────────────────────
-        if SHOTMAPS_IN_MATCH:
+        if SHOTMAPS_IN_MATCH and hasattr(shotmap_ui, "render_match_shotmaps"):
             shotmap_ui.render_match_shotmaps(
                 conn=get_conn(),
                 season=rnd_season,
@@ -2369,6 +2369,55 @@ def _live_available(g, played: bool, season: int) -> bool:
         return False
 
 
+# Round shown on arrival: after the last game of a round is imported, the finished
+# round stays on screen for this many days after its last game date, so visitors
+# can browse the analyses. Then the app moves on to the next round (a Friday
+# round stays up through Sunday and the next round shows from Monday).
+# It never holds once the next round is about to start.
+ROUND_HOLD_DAYS = 2
+ROUND_HOLD_NEXT_START_MARGIN_H = 6
+
+
+def _round_stamps(full_sched, gd):
+    """Tip off times (Europe/Paris) of every game of a round."""
+    out = []
+    d = full_sched[full_sched["gameday"] == gd]
+    for _, r in d.iterrows():
+        try:
+            day = pd.to_datetime(r["date"], format="%b %d, %Y")
+            hhmm = str(r.get("startime") or "").strip() or "00:00"
+            out.append(pd.Timestamp(f"{day.strftime('%Y-%m-%d')} {hhmm}").tz_localize("Europe/Paris"))
+        except Exception:
+            continue
+    return out
+
+
+def _round_to_hold(full_sched, round_status, all_rounds_sorted, current_round, now=None):
+    """Finished round to keep on screen, or None to show current_round."""
+    try:
+        if round_status.get(current_round, True):
+            return None  # nothing upcoming: the season is over, keep the default
+        prev = [gd for gd in all_rounds_sorted
+                if gd < current_round and round_status.get(gd, False)]
+        if not prev:
+            return None
+        prev_gd = prev[-1]
+        prev_ts = _round_stamps(full_sched, prev_gd)
+        if not prev_ts:
+            return None
+        cur_ts = _round_stamps(full_sched, current_round)
+        now = now if now is not None else pd.Timestamp.now(tz="Europe/Paris")
+        last_day = max(prev_ts).normalize()
+        hold_until = last_day + pd.Timedelta(days=ROUND_HOLD_DAYS + 1)
+        if now >= hold_until:
+            return None
+        if cur_ts and now >= min(cur_ts) - pd.Timedelta(hours=ROUND_HOLD_NEXT_START_MARGIN_H):
+            return None  # the next round is about to start
+        return prev_gd
+    except Exception:
+        return None
+
+
 def render_match_center():
     dl = _read_deeplink_once()
     with st.sidebar:
@@ -2388,7 +2437,7 @@ def render_match_center():
     all_rounds_sorted = sorted(round_labels.keys())
 
     q_full = """
-        SELECT gameday, round AS phase, played
+        SELECT gameday, round AS phase, played, date, startime
         FROM schedule
         WHERE Season = ?
     """
@@ -2412,7 +2461,9 @@ def render_match_center():
         dl.get("season") == int(season)
         and dl.get("round") in all_rounds_sorted
     )
-    anchor_round = dl["round"] if dl_active else current_round
+    hold_round = None if dl_active else _round_to_hold(
+        full_sched, round_status, all_rounds_sorted, current_round)
+    anchor_round = dl["round"] if dl_active else (hold_round or current_round)
 
     # ✅ journée entièrement jouée ; 🟡 en cours (certains matchs joués,
     # d'autres pas, cas d'une journée à cheval sur deux jours) ; ⏳ uniquement
