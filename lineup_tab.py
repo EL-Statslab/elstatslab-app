@@ -1,5 +1,5 @@
 """
-ELSTATSLAB Lineup tab (v2: five man units, trios, duos, duo matrix).
+ELSTATSLAB Lineup tab (v2.1: five man units, trios, duos, duo matrix, NetRtg on a shared possession count).
 
 Reads lineup_stints from euroleague_public.db (built by build_lineups.py,
 copied by build_public_db.py). Shows the best and worst unit of a team by
@@ -170,8 +170,12 @@ def _finish(g: pd.DataFrame) -> pd.DataFrame:
     g = g.copy()
     g["minutes"] = g["sec"] / 60.0
     g = g[(g["poff"] > 0) & (g["pdef"] > 0)].copy()
-    g["ortg"] = 100.0 * g["pf"] / g["poff"]
-    g["drtg"] = 100.0 * g["pa"] / g["pdef"]
+    # One shared possession count: both teams play the same number of possessions
+    # (within 1), so ORTG and DRTG use the average of the two estimates. Same method
+    # as calc() in Gameflow_generator.py.
+    poss = (g["poff"] + g["pdef"]) / 2.0
+    g["ortg"] = 100.0 * g["pf"] / poss
+    g["drtg"] = 100.0 * g["pa"] / poss
     g["netrtg"] = g["ortg"] - g["drtg"]
     return g.reset_index(drop=True)
 
