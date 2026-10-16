@@ -1675,10 +1675,12 @@ def build_radar_png(home_name: str, away_name: str,
                     h_stats: dict, a_stats: dict,
                     title: str) -> bytes:
     """Radar in the ELSTATSLAB paper style: home navy, away orange, real values under each axis.
-    Shape size is a fixed scale per metric (DRTG and TOV% flipped), so bigger is always better."""
+    Shape size is a fixed scale per metric (DRTG and TOV% flipped), so bigger is always better.
+    Axis labels are laid out in inches around the ring, so they never overlap the circle."""
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.patches import FancyBboxPatch
+    from matplotlib.lines import Line2D
 
     NAVY_, ORANGE_, GREY_, RULE_, CARD_ = "#14213D", "#E4572E", "#6B7280", "#E1D8C6", "#FBF8F1"
     labels = METRICS
@@ -1692,25 +1694,34 @@ def build_radar_png(home_name: str, away_name: str,
 
     h_vals, a_vals = _vals(h_stats), _vals(a_stats)
 
-    fig = Figure(figsize=(6.0, 6.6), dpi=150)
-    FigureCanvasAgg(fig)
+    W, H, DPI = 6.0, 6.6, 150
+    fig = Figure(figsize=(W, H), dpi=DPI)
+    canvas = FigureCanvasAgg(fig)
     fig.patch.set_alpha(0.0)
     card = FancyBboxPatch((0.01, 0.01), 0.98, 0.98, boxstyle="round,pad=0,rounding_size=0.035",
                           transform=fig.transFigure, facecolor=CARD_, edgecolor=RULE_,
                           linewidth=1.6, zorder=0)
     fig.add_artist(card)
 
-    # header: title + team chips
+    # header: title + team chips, each group centred on its half of the card
     fig.text(0.5, 0.945, title.upper(), ha="center", va="center", fontproperties=BARLOW_BOLD,
              fontsize=19, color=NAVY_)
-    from matplotlib.lines import Line2D
+    renderer = canvas.get_renderer()
     for x0, nm, col in ((0.27, home_name, NAVY_), (0.73, away_name, ORANGE_)):
-        fig.add_artist(Line2D([x0 - 0.17], [0.895], marker="o", markersize=10, color=col,
+        t = fig.text(0, 0.895, nm, ha="left", va="center", fontproperties=BARLOW_SEMIBOLD,
+                     fontsize=14, color=col)
+        text_w = t.get_window_extent(renderer).width / (W * DPI)
+        gap = 0.035
+        total = gap + text_w
+        left = x0 - total / 2
+        fig.add_artist(Line2D([left + 0.008], [0.895], marker="o", markersize=10, color=col,
                               transform=fig.transFigure, linestyle="none"))
-        fig.text(x0 - 0.145, 0.895, nm, ha="left", va="center", fontproperties=BARLOW_SEMIBOLD,
-                 fontsize=14, color=col)
+        t.set_x(left + gap)
 
-    ax = fig.add_axes([0.20, 0.215, 0.60, 0.60 * 6.0 / 6.6], polar=True)
+    # polar axes defined in inches so the labels can be placed precisely
+    cx_in, cy_in, R_in = W / 2, 3.15, 1.65
+    ax = fig.add_axes([(cx_in - R_in) / W, (cy_in - R_in) / H, 2 * R_in / W, 2 * R_in / H],
+                      polar=True)
     ax.set_facecolor("none")
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
@@ -1722,7 +1733,6 @@ def build_radar_png(home_name: str, away_name: str,
     ax.grid(color=RULE_, linewidth=1.0)
     ax.spines["polar"].set_color(RULE_)
     ax.spines["polar"].set_linewidth(1.6)
-    # median ring (50 percent of the scale) dashed
     ring = np.linspace(0, 2 * np.pi, 200)
     ax.plot(ring, [0.5] * len(ring), color="#CFC5B0", linewidth=1.2, linestyle=(0, (3, 3)), zorder=1)
 
@@ -1731,27 +1741,42 @@ def build_radar_png(home_name: str, away_name: str,
         ax.plot(ang_c, vals, color=col, linewidth=3.0, solid_joinstyle="round", zorder=3)
         ax.scatter(ang_c[:-1], vals[:-1], s=46, color=col, edgecolor=CARD_, linewidth=1.4, zorder=4)
 
-    # axis labels with the real values under each name
+    # axis labels: name + home value + away value, stacked as one block
     def _fmt(v):
         return "n/a" if v is None else f"{v:.1f}"
 
+    LINE = 0.20          # inches between the lines of a block
+    PAD = 0.14           # inches between the ring and the block
+    BLOCK_HALF = LINE + 0.10
+
+    def _put(x_in, y_in, s, ha, fp, size, col):
+        fig.text(x_in / W, y_in / H, s, ha=ha, va="center", fontproperties=fp,
+                 fontsize=size, color=col)
+
     for ang, m in zip(angles, labels):
-        x, y = np.sin(ang), np.cos(ang)
-        ha = "center" if abs(x) < 0.2 else ("left" if x > 0 else "right")
-        r = 1.17
-        ax.text(ang, r, m, ha=ha, va="center", fontproperties=BARLOW_BOLD, fontsize=15,
-                color=NAVY_, transform=ax.transData)
-        # value line: placed slightly further out on the same ray
-        for dy, st_, col in ((-17, h_stats, NAVY_), (-31, a_stats, ORANGE_)):
-            ax.annotate(_fmt(st_.get(m)), xy=(ang, 1.17), xycoords="data", xytext=(0, dy),
-                        textcoords="offset points", annotation_clip=False, ha=ha, va="center",
-                        fontproperties=BARLOW_SEMIBOLD, fontsize=12.5, color=col)
+        sx, cy_ = np.sin(ang), np.cos(ang)
+        if abs(sx) < 0.2:                           # top or bottom: centred
+            ha = "center"
+            dist = R_in + PAD + BLOCK_HALF
+            bx = cx_in
+            by = cy_in + np.sign(cy_) * dist
+        elif abs(cy_) < 0.2:                        # left or right: next to the ring
+            ha = "left" if sx > 0 else "right"
+            bx = cx_in + np.sign(sx) * (R_in + PAD + 0.04)
+            by = cy_in
+        else:                                       # diagonals: pushed further out
+            ha = "left" if sx > 0 else "right"
+            bx = cx_in + sx * R_in * 1.22
+            by = cy_in + cy_ * R_in * 1.22
+        _put(bx, by + LINE, m, ha, BARLOW_BOLD, 15, NAVY_)
+        _put(bx, by, _fmt(h_stats.get(m)), ha, BARLOW_SEMIBOLD, 12.5, NAVY_)
+        _put(bx, by - LINE * 0.95, _fmt(a_stats.get(m)), ha, BARLOW_SEMIBOLD, 12.5, ORANGE_)
 
     fig.text(0.5, 0.04, "Shape size uses a fixed scale per metric. DRTG and TOV% are flipped, so bigger is better.",
              ha="center", va="center", fontproperties=BARLOW_REGULAR, fontsize=10.5, color=GREY_)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=150, transparent=True)
+    fig.savefig(buf, format="png", dpi=DPI, transparent=True)
     return buf.getvalue()
 
 
