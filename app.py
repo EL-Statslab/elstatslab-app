@@ -1659,6 +1659,9 @@ RADAR_RANGES = {
 }
 RADAR_LOWER_IS_BETTER = {"DRTG", "TOV%"}
 
+# Clockwise from the top. NETRTG (the summary) on top, offense on the left, defense on the right.
+RADAR_ORDER = ["NETRTG", "REB%", "DRTG", "OREB%", "TOV%", "AST%", "ORTG", "eFG%"]
+
 
 def _normalize_radar(value, metric):
     if value is None:
@@ -1683,7 +1686,7 @@ def build_radar_png(home_name: str, away_name: str,
     from matplotlib.lines import Line2D
 
     NAVY_, ORANGE_, GREY_, RULE_, CARD_ = "#14213D", "#E4572E", "#6B7280", "#E1D8C6", "#FBF8F1"
-    labels = METRICS
+    labels = RADAR_ORDER
     n = len(labels)
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
     ang_c = np.concatenate([angles, angles[:1]])
