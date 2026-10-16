@@ -1660,7 +1660,7 @@ RADAR_RANGES = {
 RADAR_LOWER_IS_BETTER = {"DRTG", "TOV%"}
 
 # Clockwise from the top. NETRTG (the summary) on top, offense on the left, defense on the right.
-RADAR_ORDER = ["NETRTG", "REB%", "DRTG", "OREB%", "TOV%", "AST%", "ORTG", "eFG%"]
+RADAR_ORDER = ["NETRTG", "DRTG", "REB%", "OREB%", "TOV%", "AST%", "eFG%", "ORTG"]
 
 
 def _normalize_radar(value, metric):
