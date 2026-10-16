@@ -1780,6 +1780,19 @@ def build_radar_png(home_name: str, away_name: str,
     return buf.getvalue()
 
 
+def combine_radar_pngs(png_left: bytes, png_right: bytes, gap_px: int = 24) -> bytes:
+    """Puts the two radar cards side by side in one PNG, for a single download."""
+    a = Image.open(io.BytesIO(png_left)).convert("RGBA")
+    b = Image.open(io.BytesIO(png_right)).convert("RGBA")
+    h = max(a.height, b.height)
+    canvas = Image.new("RGBA", (a.width + gap_px + b.width, h), (0, 0, 0, 0))
+    canvas.paste(a, (0, 0), a)
+    canvas.paste(b, (a.width + gap_px, 0), b)
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 # Matchup PNG export lives in preview_export.py (ELSTATSLAB paper style)
 from preview_export import build_preview_png  # noqa: E402
 
@@ -2170,6 +2183,13 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                 radar_png2 = build_radar_png(home_disp, away_disp, right_h, right_a,
                                              right_label_str)
                 st.image(radar_png2, use_container_width=True)
+            st.download_button(
+                label="📥 Download radar image",
+                data=combine_radar_pngs(radar_png, radar_png2),
+                file_name=f"Radar_R{rnd}_{hcode}_vs_{acode}.png",
+                mime="image/png",
+                key=f"radar_dl_{card_index}_{rnd}_{hcode}_{acode}",
+            )
         else:
             with col1:
                 render_comparison_styled("Season", home_disp, away_disp,
