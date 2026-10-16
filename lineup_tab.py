@@ -33,6 +33,18 @@ MIN_POSS_MATCH = 6.0        # single match, same value as MIN_LINEUP_POSS in Gam
 LEGACY_UP_TO = {2026: 37}
 # Matches already published with another possession minimum keep it: {(season, gamecode): minimum}
 POSS_OVERRIDE = {(2026, 40): 8.0}
+# Matches whose Game Flow and Match Center were published before the shared possession count
+# keep the old NetRtg (ORTG and DRTG each on their own possession estimate), so the numbers
+# already seen on the site do not change. {season: last gamecode kept with the old NetRtg}
+LEGACY_NETRTG_UP_TO = {2026: 54}
+
+
+def _legacy_net(season, game_code) -> bool:
+    """True when this match keeps the old NetRtg calculation (separate possession estimates)."""
+    try:
+        return int(game_code) <= LEGACY_NETRTG_UP_TO.get(int(season), 0)
+    except (TypeError, ValueError):
+        return False
 
 
 def _match_poss(season, game_code) -> float:
@@ -163,24 +175,28 @@ def _match_labels(conn, season, games, name_fn) -> dict:
     return labels
 
 
-def _finish(g: pd.DataFrame) -> pd.DataFrame:
+def _finish(g: pd.DataFrame, shared: bool = True) -> pd.DataFrame:
     """Adds minutes, ORTG, DRTG and NetRtg to an aggregated table."""
     if g.empty:
         return g
     g = g.copy()
     g["minutes"] = g["sec"] / 60.0
     g = g[(g["poff"] > 0) & (g["pdef"] > 0)].copy()
-    # One shared possession count: both teams play the same number of possessions
-    # (within 1), so ORTG and DRTG use the average of the two estimates. Same method
-    # as calc() in Gameflow_generator.py.
-    poss = (g["poff"] + g["pdef"]) / 2.0
-    g["ortg"] = 100.0 * g["pf"] / poss
-    g["drtg"] = 100.0 * g["pa"] / poss
+    if shared:
+        # One shared possession count: both teams play the same number of possessions
+        # (within 1), so ORTG and DRTG use the average of the two estimates. Same method
+        # as calc() in Gameflow_generator.py v27.
+        poff = pdef = (g["poff"] + g["pdef"]) / 2.0
+    else:
+        # Old method, kept for matches published before the change (LEGACY_NETRTG_UP_TO).
+        poff, pdef = g["poff"], g["pdef"]
+    g["ortg"] = 100.0 * g["pf"] / poff
+    g["drtg"] = 100.0 * g["pa"] / pdef
     g["netrtg"] = g["ortg"] - g["drtg"]
     return g.reset_index(drop=True)
 
 
-def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
+def _aggregate(df: pd.DataFrame, shared: bool = True) -> pd.DataFrame:
     """Five man units, cumulated over the games of the selection."""
     if df.empty:
         return df
@@ -188,7 +204,7 @@ def _aggregate(df: pd.DataFrame) -> pd.DataFrame:
            .agg(gp=("gamecode", "nunique"), sec=("sec", "sum"),
                 pf=("pts_for", "sum"), pa=("pts_against", "sum"),
                 poff=("poss_off", "sum"), pdef=("poss_def", "sum")))
-    return _finish(g)
+    return _finish(g, shared)
 
 
 def _combo_table(df: pd.DataFrame, k: int) -> pd.DataFrame:
@@ -379,7 +395,10 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     n_games = int(df["gamecode"].nunique())
     st.caption(f"{name_fn(team)}: {n_games} game{'s' if n_games != 1 else ''} in this selection. "
                "GP in the table is the number of games the unit played together.")
-    agg = _aggregate(df) if k == 5 else _finish(_combo_table(df, k))
+    # Season and Rounds always use the shared possession count. A single match already
+    # published keeps its old NetRtg, like in the Match Center.
+    shared = not (scope == "Match" and _legacy_net(season, match_gc))
+    agg = _aggregate(df, shared) if k == 5 else _finish(_combo_table(df, k), shared)
     if agg.empty:
         st.info("No lineup with enough data for this selection.")
         return
@@ -507,7 +526,8 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
 # ---------------------------------------------------------------------------
 # Match Center section: both teams of one played match
 # ---------------------------------------------------------------------------
-def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False, poss=None) -> dict:
+def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False, poss=None,
+                 shared: bool = True) -> dict:
     """
     Best and worst 5, best trio and best duo of one team in one match.
     legacy=True reproduces what was published before the fixes: old seconds
@@ -520,7 +540,7 @@ def _match_units(df: pd.DataFrame, short: bool, legacy: bool = False, poss=None)
     if legacy:
         df = df.assign(sec=df["sec_v1"])
     for key, k in (("5", 5), ("trio", 3), ("duo", 2)):
-        agg = _aggregate(df) if k == 5 else _finish(_combo_table(df, k))
+        agg = _aggregate(df, shared) if k == 5 else _finish(_combo_table(df, k), shared)
         if agg.empty:
             continue
         need = max(MIN_MINUTES_MATCH, MIN_PER_GAME[k])
@@ -591,6 +611,7 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
             return
 
         legacy = int(game_code) <= LEGACY_UP_TO.get(int(season), 0)
+        shared = not _legacy_net(season, game_code)
         poss_txt = ("" if legacy else
                     f", and at least {_match_poss(season, game_code):g} possessions on each side")
         st.caption("Units by NetRtg (ORTG minus DRTG per 100 possessions). Minimum "
@@ -602,7 +623,7 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
         cols = st.columns(2)
         for col, code, accent in ((cols[0], home_code, NAVY), (cols[1], away_code, ORANGE)):
             units = _match_units(data[code], short=False, legacy=legacy,
-                                 poss=_match_poss(season, game_code))
+                                 poss=_match_poss(season, game_code), shared=shared)
             with col:
                 st.markdown(f"**{home_disp if code == home_code else away_disp}**")
                 if units["best5"]:
@@ -635,7 +656,8 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
                             sides[key] = {"name": disp, "logo": str(logo) if logo else "",
                                           "zoom": zoom,
                                           **_match_units(data[code], short=False, legacy=legacy,
-                                                         poss=_match_poss(season, game_code))}
+                                                         poss=_match_poss(season, game_code),
+                                                         shared=shared)}
                         payload = {"round_label": round_label,
                                    "brand_logo": str(brand) if brand and brand.exists() else "",
                                    **sides}
