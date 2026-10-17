@@ -1952,13 +1952,15 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
     b64 = base64.b64encode(radar_png).decode("ascii")
     st.markdown(
         "<style>"
-        ".esl-mx{display:flex;gap:28px;align-items:stretch;width:100%;}"
-        ".esl-mx-left{flex:1 1 0;min-width:0;}"
-        ".esl-mx-right{flex:1 1 0;min-width:0;position:relative;}"
+        # the radar column takes the height of the tables and, through its aspect
+        # ratio, exactly the width that height needs: no empty space around it
+        ".esl-mx{display:flex;gap:28px;align-items:stretch;justify-content:center;width:100%;}"
+        ".esl-mx-left{flex:1 1 auto;min-width:0;max-width:820px;}"
+        ".esl-mx-right{flex:0 0 auto;aspect-ratio:6/6.6;position:relative;}"
         ".esl-mx-right img{position:absolute;inset:0;width:100%;height:100%;"
-        "object-fit:contain;object-position:center top;}"
+        "object-fit:contain;}"
         "@media (max-width: 760px){.esl-mx{flex-direction:column;}"
-        ".esl-mx-right{aspect-ratio:6/6.6;}}"
+        ".esl-mx-left{max-width:none;}.esl-mx-right{width:100%;}}"
         "</style>"
         f"<div class='esl-mx'><div class='esl-mx-left'>{html}</div>"
         f"<div class='esl-mx-right'><img src='data:image/png;base64,{b64}' alt='Radar'/></div>"
@@ -2356,7 +2358,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                               h_recent=h_recent, a_recent=a_recent, gauges=use_form,
                               radar_png=radar_png)
         if radar_png is not None:
-            _c1, _c2 = st.columns(2)
+            _c1, _c2 = st.columns([3, 1])
             with _c2:
                 st.download_button(
                     label="📥 Download radar image",
