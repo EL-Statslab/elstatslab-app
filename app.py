@@ -1269,7 +1269,7 @@ def colour_intensity(hv, av, metric: str) -> tuple[float, float]:
 
 
 def render_comparison_styled(label: str, home: str, away: str,
-                              h_stats: dict, a_stats: dict):
+                              h_stats: dict, a_stats: dict, metrics: list | None = None):
     st.markdown(f"**{label}**")
     if not h_stats or not a_stats:
         st.info("Not enough games yet for this scope.")
@@ -1283,7 +1283,7 @@ def render_comparison_styled(label: str, home: str, away: str,
         return f"rgba(218, 54, 51, {alpha:.3f})"
 
     rows_html = ""
-    for m in METRICS:
+    for m in (metrics or METRICS):
         hv = h_stats.get(m)
         av = a_stats.get(m)
         h_int, a_int = colour_intensity(hv, av, m)
@@ -1798,6 +1798,81 @@ def combine_radar_pngs(png_left: bytes, png_right: bytes, gap_px: int = 24) -> b
 
 # Matchup PNG export lives in preview_export.py (ELSTATSLAB paper style)
 from preview_export import build_preview_png  # noqa: E402
+# "Where the game can swing": same battles and same rules as the PNG
+from preview_export import (SWING_OUTLINE_MIN, SWING_TABLE_METRICS,  # noqa: E402
+                            _ordinal, swing_battles)
+
+
+@st.cache_data(show_spinner=False, max_entries=48)
+def cached_radar_png(home_name: str, away_name: str, h_items: tuple, a_items: tuple,
+                     title: str) -> bytes:
+    """The radar is drawn once per data set, not on every rerun of the page."""
+    return build_radar_png(home_name, away_name, dict(h_items), dict(a_items), title)
+
+
+def _radar_items(stats: dict) -> tuple:
+    return tuple((m, stats.get(m)) for m in METRICS)
+
+
+def render_swing_block(battles: list):
+    """HTML version of the PNG block. Home team on the left, away team on the right.
+    The triangle points towards the team that wins the battle. The winning cell is
+    outlined only when its own stat is good (not merely facing a weak side)."""
+    navy, orange, grey = "#14213D", "#E4572E", "#6B7280"
+
+    def bg(pct):
+        inten = (pct - 50) / 50
+        if inten >= 0:
+            return f"rgba(46, 160, 67, {min(0.55, inten * 0.6):.3f})"
+        return f"rgba(218, 54, 51, {min(0.55, -inten * 0.6):.3f})"
+
+    def cell(val, pct, lab, rank, outline):
+        shown = f"{val:.1f}" if "FT Rate" in lab else f"{val:.1f}%"
+        sub = f"{lab} · {_ordinal(rank)}" if rank else lab
+        border = f"border:3px solid {outline};" if outline else "border:3px solid transparent;"
+        return (f"<td style='background:{bg(pct)};{border}border-radius:8px;padding:6px 4px;"
+                f"text-align:center;color:{navy};'>"
+                f"<div style='font-weight:700;font-size:1.15rem;line-height:1.15;'>{shown}</div>"
+                f"<div style='font-size:0.75rem;font-weight:600;line-height:1.2;'>{sub}</div></td>")
+
+    rows = ""
+    for b in battles:
+        home_att = b["attacker"] == "home"
+        off = (b["off_val"], b["off_pct"], b["off_lab"], b["off_rank"])
+        dfn = (b["def_val"], b["def_pct"], b["def_lab"], b["def_rank"])
+        left, right = (off, dfn) if home_att else (dfn, off)
+        outline = {"home": None, "away": None}
+        if b["verdict"] == "EDGE":
+            w = b["winner"]
+            if (left if w == "home" else right)[1] >= SWING_OUTLINE_MIN:
+                outline[w] = navy if w == "home" else orange
+        if b["verdict"] == "EDGE":
+            col = navy if b["winner"] == "home" else orange
+            verdict = ("&#9664;&nbsp;EDGE" if b["winner"] == "home" else "EDGE&nbsp;&#9654;")
+        elif b["verdict"] == "CLASH":
+            col, verdict = grey, "&#9664;&nbsp;CLASH&nbsp;&#9654;"
+        else:
+            col, verdict = grey, "EVEN"
+        mid = (f"<td style='text-align:center;padding:4px 2px;'>"
+               f"<div style='font-size:0.72rem;font-weight:600;color:{navy};letter-spacing:0.4px;'>"
+               f"{b['family']}</div>"
+               f"<div style='font-size:0.95rem;font-weight:700;color:{col};white-space:nowrap;'>"
+               f"{verdict}</div></td>")
+        rows += ("<tr>" + cell(*left, outline["home"]) + mid
+                 + cell(*right, outline["away"]) + "</tr>")
+
+    st.markdown(
+        "<div style='margin-top:14px;'>"
+        f"<div style='font-weight:700;color:{navy};margin-bottom:6px;'>Where the game can swing</div>"
+        "<table style='width:100%;border-collapse:separate;border-spacing:0 6px;"
+        "table-layout:fixed;font-family:sans-serif;'>"
+        "<colgroup><col style='width:38%;'><col style='width:24%;'><col style='width:38%;'></colgroup>"
+        f"<tbody>{rows}</tbody></table>"
+        f"<div style='font-size:0.75rem;color:{grey};margin-top:2px;'>"
+        "Each row puts one team's attack against the other's defense. "
+        "Ranks among all teams this season.</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 
@@ -2146,14 +2221,21 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     st.divider()
 
+    # Upcoming regular season game: Season table and "Where the game can swing" on the
+    # left, radar on the right, no toggle. Played games and the postseason keep the
+    # toggle between tables and radar, as before.
+    swing_layout = (not played) and phase == "RS"
+
     toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
     if toggle_key not in st.session_state:
         st.session_state[toggle_key] = False
 
     tcol1, tcol2, tcol3 = st.columns([2, 1, 2])
-    with tcol2:
-        use_radar = st.toggle("🕸️ Radar", key=toggle_key,
-                              value=st.session_state[toggle_key])
+    use_radar = False
+    if not swing_layout:
+        with tcol2:
+            use_radar = st.toggle("🕸️ Radar", key=toggle_key,
+                                  value=st.session_state[toggle_key])
     with tcol3:
         share_url = f"{SHARE_BASE_URL}/?" + urlencode(
             {"s": int(rnd_season), "r": int(rnd), "m": f"{hcode}_{acode}"}
@@ -2165,7 +2247,37 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     use_form = (not played and phase == "RS" and int(rnd) >= LAST5_MIN_ROUND
                 and bool(h_recent) and bool(a_recent))
 
-    if use_form and not use_radar:
+    if swing_layout:
+        col1, col2 = st.columns(2)
+        with col1:
+            render_comparison_styled("Season", home_disp, away_disp, h_season, a_season,
+                                     metrics=SWING_TABLE_METRICS)
+            battles = swing_battles(hcode, acode, season=int(rnd_season), db_path=str(DB_PATH))
+            if battles:
+                render_swing_block(battles)
+        with col2:
+            # Last 5 radar from LAST5_MIN_ROUND (before that it is almost the season)
+            if use_form:
+                r_title, r_h, r_a = f"Last {ROLLING_WINDOW}", h_recent, a_recent
+            else:
+                r_title, r_h, r_a = "Season", h_season, a_season
+            try:
+                radar_png = cached_radar_png(home_disp, away_disp, _radar_items(r_h),
+                                             _radar_items(r_a), r_title)
+                st.image(radar_png, use_container_width=True)
+                if not use_form:
+                    st.caption(f"The Last {ROLLING_WINDOW} radar replaces the season view "
+                               f"from Round {LAST5_MIN_ROUND}.")
+                st.download_button(
+                    label="📥 Download radar image",
+                    data=radar_png,
+                    file_name=f"Radar_R{rnd}_{hcode}_vs_{acode}.png",
+                    mime="image/png",
+                    key=f"radar_dl_{card_index}_{rnd}_{hcode}_{acode}",
+                )
+            except Exception:
+                st.caption("Radar unavailable for this game.")
+    elif use_form and not use_radar:
         render_comparison_form(home_disp, away_disp, h_season, a_season,
                                h_recent, a_recent)
     else:
@@ -2319,6 +2431,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     round_=phase,
                     series_score=series,
                     form_gauges=use_form,
+                    season=int(rnd_season),
+                    db_path=str(DB_PATH),
                 )
             st.rerun()
 
@@ -2831,10 +2945,36 @@ replaced by the series score.
 """
     )
 
+    st.markdown("### Before a regular season game")
+    st.markdown(
+        """
+The left side shows the **Season** table (ORTG, DRTG, NETRTG, REB%, AST%) and the
+**Where the game can swing** block. The right side shows a **radar**: the season profile of the
+two teams, then their last five games from Round 13, when recent form starts to differ from the
+season.
+
+**Where the game can swing** picks the three most telling battles between one team's attack and
+the other team's defense, on the Four Factors: shooting (eFG% against Opp eFG%), turnovers (TOV%
+against Opp TOV%), rebounding (OREB% against DREB%) and free throws (FT Rate against Opp FT Rate).
+The figures and ranks are the ones of the Team Rankings tab. A battle is picked when the gap
+between the two sides is large, when one of them stands out from the rest of the league (a 1st or a
+last place weighs a lot), or when strength meets strength.
+
+- **EDGE**: one side wins the battle. The triangle points towards that team, in its colour, and its
+  cell is outlined when its own number is a real strength.
+- **CLASH**: two strengths face each other, with no clear winner.
+- **EVEN**: no meaningful gap.
+
+**Two colour logics.** In the Season table, the colour compares the two teams with each other:
+green is the better of the two values. In Where the game can swing, the colour shows where each
+number ranks among all teams of the league: green is near the top, red near the bottom.
+"""
+    )
+
     st.markdown("### The comparison tables")
     st.markdown(
         """
-Two tables sit side by side.
+For games already played and for the postseason, two tables sit side by side.
 
 **Season** covers every game the two teams have played this season up to that round.
 
