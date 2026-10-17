@@ -99,6 +99,7 @@ SWING_FACTORS = [
 SWING_EDGE_MIN = 30     # under this percentile gap, two strong sides make a CLASH
 SWING_VERDICT_MIN = 15  # smaller gaps are shown as EVEN (or CLASH when both are strong)
 SWING_CLASH_MIN = 75    # both sides at least this percentile: strength against strength
+SWING_OUTLINE_MIN = 55  # the winning cell is outlined only when its own stat is good
 # Same database as the site first (Team Rankings reads euroleague_public.db)
 SWING_DB_CANDIDATES = ["euroleague_public.db", "euroleague.db", "../euroleague.db",
                        r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db"]
@@ -503,12 +504,6 @@ def _ordinal(p: float) -> str:
     return f"{n}{suf}"
 
 
-def _abbr(code: str) -> str:
-    """Short TV style name from the logo file (OLY, FEN, RMD...), else the code."""
-    f = LOGO_MAP.get(code)
-    return Path(f).stem.upper() if f else code
-
-
 def _triangle(ax, x, y, direction, colour, size=9):
     """Small solid triangle pointing left (-1) or right (+1), its tip at x."""
     base = x - direction * size * 1.3
@@ -539,7 +534,8 @@ def _draw_swing(ax, battles, y_top, home_code, away_code):
         left, right = (off, dfn) if home_att else (dfn, off)
         for side, (val, pct, lab, rank), cx0 in (("home", left, xh), ("away", right, xa)):
             _rbox(ax, cx0, y, cell_w, cell_h, cell_colour((pct - 50) / 50), r=10, z=2)
-            if b["verdict"] == "EDGE" and b["winner"] == side:
+            # outline only when the winner is good at it, not merely facing a weak side
+            if b["verdict"] == "EDGE" and b["winner"] == side and pct >= SWING_OUTLINE_MIN:
                 _rbox(ax, cx0, y, cell_w, cell_h, "none", ec=NAVY if side == "home" else ORANGE,
                       r=10, lw=3.2, z=3)
             shown = f"{val:.1f}" if "FT Rate" in lab else f"{val:.1f}%"
@@ -550,9 +546,9 @@ def _draw_swing(ax, battles, y_top, home_code, away_code):
         _text(ax, cx, y + 17, b["family"], 19, BARLOW_SEMIBOLD, NAVY, ha="center")
         vy, vsize = y + 42, 21
         if b["verdict"] == "EDGE":
-            home_wins = b["winner"] == "home"
-            vtxt = f"EDGE {_abbr(home_code if home_wins else away_code)}"
-            vcol = NAVY if home_wins else ORANGE
+            # the triangle and the colour name the team, so the word alone is enough
+            vtxt = "EDGE"
+            vcol = NAVY if b["winner"] == "home" else ORANGE
         else:
             vtxt, vcol = b["verdict"], GREY
         _text(ax, cx, vy, vtxt, vsize, BARLOW_BOLD, vcol, ha="center")
