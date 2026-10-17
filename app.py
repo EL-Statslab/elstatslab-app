@@ -1814,66 +1814,133 @@ def _radar_items(stats: dict) -> tuple:
     return tuple((m, stats.get(m)) for m in METRICS)
 
 
-def render_swing_block(battles: list):
-    """HTML version of the PNG block. Home team on the left, away team on the right.
-    The triangle points towards the team that wins the battle. The winning cell is
-    outlined only when its own stat is good (not merely facing a weak side)."""
+def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
+                          battles: list | None = None,
+                          h_recent: dict | None = None, a_recent: dict | None = None,
+                          gauges: bool = False):
+    """Season table and "Where the game can swing" drawn by the same code, so every
+    cell has the same width and height in both blocks. Home team on the left, away
+    team on the right. With gauges on (from LAST5_MIN_ROUND), each Season cell also
+    carries the Last 5 bar: dot = season value, line end = Last 5 value."""
     navy, orange, grey = "#14213D", "#E4572E", "#6B7280"
+    if not h_stats or not a_stats:
+        st.info("Not enough games yet for this scope.")
+        return
 
-    def bg(pct):
-        inten = (pct - 50) / 50
-        if inten >= 0:
-            return f"rgba(46, 160, 67, {min(0.55, inten * 0.6):.3f})"
-        return f"rgba(218, 54, 51, {min(0.55, -inten * 0.6):.3f})"
+    def bg(intensity):
+        if intensity >= 0:
+            return f"rgba(46, 160, 67, {min(0.55, intensity * 0.6):.3f})"
+        return f"rgba(218, 54, 51, {min(0.55, -intensity * 0.6):.3f})"
 
-    def cell(val, pct, lab, rank, outline):
-        shown = f"{val:.1f}" if "FT Rate" in lab else f"{val:.1f}%"
-        sub = f"{lab} · {_ordinal(rank)}" if rank else lab
-        border = f"border:3px solid {outline};" if outline else "border:3px solid transparent;"
-        return (f"<td style='background:{bg(pct)};{border}border-radius:8px;padding:6px 4px;"
-                f"text-align:center;color:{navy};'>"
-                f"<div style='font-weight:700;font-size:1.15rem;line-height:1.15;'>{shown}</div>"
-                f"<div style='font-size:0.75rem;font-weight:600;line-height:1.2;'>{sub}</div></td>")
+    def gauge(metric, season_v, l5_v):
+        if season_v is None or l5_v is None:
+            return ""
+        d = float(l5_v) - float(season_v)
+        better = (d < 0) if metric in LOWER_IS_BETTER else (d > 0)
+        col = "#2ea043" if better else "#da3633"
+        norm = max(-1.0, min(1.0, d / METRIC_SCALE.get(metric, 5.0)))
+        end = 50 + norm * 42
+        lo, hi = min(50, end), max(50, end)
+        parts = ("<div style='position:relative;width:80%;margin:3px auto 0 auto;height:12px;'>"
+                 "<div style='position:absolute;left:0;right:0;top:5px;height:2px;"
+                 "background:rgba(20,33,61,0.18);border-radius:2px;'></div>")
+        if abs(d) >= LAST5_MIN_GAP * METRIC_SCALE.get(metric, 5.0):
+            parts += (f"<div style='position:absolute;left:{lo:.1f}%;width:{hi - lo:.1f}%;"
+                      f"top:4px;height:4px;background:{col};border-radius:2px;'></div>"
+                      f"<div style='position:absolute;left:calc({end:.1f}% - 5px);top:1px;"
+                      f"width:10px;height:10px;border-radius:50%;background:{col};'></div>")
+        parts += ("<div style='position:absolute;left:calc(50% - 4px);top:2px;width:8px;"
+                  "height:8px;border-radius:50%;background:#14213D;'></div></div>")
+        return parts
 
+    # one cell style for both blocks: same height, same border box, same fonts
+    CELL = ("height:62px;box-sizing:border-box;border-radius:8px;padding:4px 6px;"
+            f"text-align:center;vertical-align:middle;color:{navy};")
+    VAL = "font-weight:700;font-size:1.3rem;line-height:1.1;"
+    SUB = "font-weight:600;font-size:0.75rem;line-height:1.25;"
+    MID = (f"height:62px;box-sizing:border-box;text-align:center;vertical-align:middle;"
+           f"color:{navy};padding:2px;")
+    TABLE = ("<table style='width:100%;border-collapse:separate;border-spacing:0 6px;"
+             "table-layout:fixed;margin:0;'>"
+             "<colgroup><col style='width:37%;'><col style='width:26%;'>"
+             "<col style='width:37%;'></colgroup>")
+    TITLE = (f"<div style='font-weight:700;font-size:1.15rem;color:{navy};"
+             "margin:10px 0 2px 0;'>{}</div>")
+
+    def td(inner, background, outline=None):
+        border = f"3px solid {outline}" if outline else "3px solid transparent"
+        return f"<td style='{CELL}background:{background};border:{border};'>{inner}</td>"
+
+    # ---- Season
     rows = ""
-    for b in battles:
-        home_att = b["attacker"] == "home"
-        off = (b["off_val"], b["off_pct"], b["off_lab"], b["off_rank"])
-        dfn = (b["def_val"], b["def_pct"], b["def_lab"], b["def_rank"])
-        left, right = (off, dfn) if home_att else (dfn, off)
-        outline = {"home": None, "away": None}
-        if b["verdict"] == "EDGE":
-            w = b["winner"]
-            if (left if w == "home" else right)[1] >= SWING_OUTLINE_MIN:
-                outline[w] = navy if w == "home" else orange
-        if b["verdict"] == "EDGE":
-            col = navy if b["winner"] == "home" else orange
-            verdict = ("&#9664;&nbsp;EDGE" if b["winner"] == "home" else "EDGE&nbsp;&#9654;")
-        elif b["verdict"] == "CLASH":
-            col, verdict = grey, "&#9664;&nbsp;CLASH&nbsp;&#9654;"
-        else:
-            col, verdict = grey, "EVEN"
-        mid = (f"<td style='text-align:center;padding:4px 2px;'>"
-               f"<div style='font-size:0.72rem;font-weight:600;color:{navy};letter-spacing:0.4px;'>"
-               f"{b['family']}</div>"
-               f"<div style='font-size:0.95rem;font-weight:700;color:{col};white-space:nowrap;'>"
-               f"{verdict}</div></td>")
-        rows += ("<tr>" + cell(*left, outline["home"]) + mid
-                 + cell(*right, outline["away"]) + "</tr>")
+    metrics = SWING_TABLE_METRICS if battles else METRICS
+    for m in metrics:
+        hv, av = h_stats.get(m), a_stats.get(m)
+        h_int, a_int = colour_intensity(hv, av, m)
+        cells = []
+        for val, inten, rec in ((hv, h_int, h_recent), (av, a_int, a_recent)):
+            txt = f"{val:.1f}" if val is not None else "-"
+            inner = f"<div style='{VAL}'>{txt}</div>"
+            if gauges:
+                inner += gauge(m, val, (rec or {}).get(m))
+            cells.append(td(inner, bg(inten)))
+        rows += (f"<tr>{cells[0]}<td style='{MID}font-weight:600;font-size:1rem;'>{m}</td>"
+                 f"{cells[1]}</tr>")
+    head = ("<tr>"
+            f"<th style='font-size:0.85rem;font-weight:600;color:{navy};text-align:center;"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;'>{home}</th>"
+            "<th></th>"
+            f"<th style='font-size:0.85rem;font-weight:600;color:{orange};text-align:center;"
+            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;'>{away}</th>"
+            "</tr>")
+    legend = ""
+    if gauges:
+        legend = (f"<div style='font-size:0.8rem;color:{grey};margin-bottom:2px;'>"
+                  "Bars: dot = season, line end = last 5 games "
+                  "(<span style='color:#2ea043;font-weight:700;'>green</span> better, "
+                  "<span style='color:#da3633;font-weight:700;'>red</span> worse)</div>")
+    html = TITLE.format("Season") + legend + TABLE + f"<thead>{head}</thead><tbody>{rows}</tbody></table>"
 
-    st.markdown(
-        "<div style='margin-top:14px;'>"
-        f"<div style='font-weight:700;color:{navy};margin-bottom:6px;'>Where the game can swing</div>"
-        "<table style='width:100%;border-collapse:separate;border-spacing:0 6px;"
-        "table-layout:fixed;font-family:sans-serif;'>"
-        "<colgroup><col style='width:38%;'><col style='width:24%;'><col style='width:38%;'></colgroup>"
-        f"<tbody>{rows}</tbody></table>"
-        f"<div style='font-size:0.75rem;color:{grey};margin-top:2px;'>"
-        "Each row puts one team's attack against the other's defense. "
-        "Ranks among all teams this season.</div></div>",
-        unsafe_allow_html=True,
-    )
+    # ---- Where the game can swing
+    if battles:
+        def pct_bg(pct):
+            return bg((pct - 50) / 50)
 
+        rows = ""
+        for b in battles:
+            home_att = b["attacker"] == "home"
+            off = (b["off_val"], b["off_pct"], b["off_lab"], b["off_rank"])
+            dfn = (b["def_val"], b["def_pct"], b["def_lab"], b["def_rank"])
+            left, right = (off, dfn) if home_att else (dfn, off)
+            outline = {"home": None, "away": None}
+            if b["verdict"] == "EDGE":
+                w = b["winner"]
+                if (left if w == "home" else right)[1] >= SWING_OUTLINE_MIN:
+                    outline[w] = navy if w == "home" else orange
+                col = navy if w == "home" else orange
+                verdict = "&#9664;&nbsp;EDGE" if w == "home" else "EDGE&nbsp;&#9654;"
+            elif b["verdict"] == "CLASH":
+                col, verdict = grey, "&#9664;&nbsp;CLASH&nbsp;&#9654;"
+            else:
+                col, verdict = grey, "EVEN"
+            cells = []
+            for (val, pct, lab, rank), side in ((left, "home"), (right, "away")):
+                shown = f"{val:.1f}" if "FT Rate" in lab else f"{val:.1f}%"
+                sub = f"{lab} · {_ordinal(rank)}" if rank else lab
+                inner = f"<div style='{VAL}'>{shown}</div><div style='{SUB}'>{sub}</div>"
+                cells.append(td(inner, pct_bg(pct), outline[side]))
+            mid = (f"<td style='{MID}'>"
+                   f"<div style='font-size:0.72rem;font-weight:600;letter-spacing:0.4px;'>"
+                   f"{b['family']}</div>"
+                   f"<div style='font-size:1rem;font-weight:700;color:{col};white-space:nowrap;'>"
+                   f"{verdict}</div></td>")
+            rows += f"<tr>{cells[0]}{mid}{cells[1]}</tr>"
+        html += (TITLE.format("Where the game can swing") + TABLE + f"<tbody>{rows}</tbody></table>"
+                 f"<div style='font-size:0.75rem;color:{grey};margin-top:2px;'>"
+                 "Each row puts one team's attack against the other's defense. "
+                 "Ranks among all teams this season.</div>")
+
+    st.markdown(f"<div style='width:100%;'>{html}</div>", unsafe_allow_html=True)
 
 
 # =============================================================================
@@ -2250,14 +2317,13 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     if swing_layout:
         col1, col2 = st.columns(2)
         with col1:
-            render_comparison_styled("Season", home_disp, away_disp, h_season, a_season,
-                                     metrics=SWING_TABLE_METRICS)
             battles = swing_battles(hcode, acode, season=int(rnd_season), db_path=str(DB_PATH))
-            if battles:
-                render_swing_block(battles)
+            # From LAST5_MIN_ROUND the Season cells also carry the Last 5 bars
+            render_matchup_tables(home_disp, away_disp, h_season, a_season, battles,
+                                  h_recent=h_recent, a_recent=a_recent, gauges=use_form)
         with col2:
-            # Last 5 radar from LAST5_MIN_ROUND (before that it is almost the season)
-            if use_form:
+            # Radar of the last 5 games (the season if a team has not played yet)
+            if h_recent and a_recent:
                 r_title, r_h, r_a = f"Last {ROLLING_WINDOW}", h_recent, a_recent
             else:
                 r_title, r_h, r_a = "Season", h_season, a_season
@@ -2265,9 +2331,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                 radar_png = cached_radar_png(home_disp, away_disp, _radar_items(r_h),
                                              _radar_items(r_a), r_title)
                 st.image(radar_png, use_container_width=True)
-                if not use_form:
-                    st.caption(f"The Last {ROLLING_WINDOW} radar replaces the season view "
-                               f"from Round {LAST5_MIN_ROUND}.")
                 st.download_button(
                     label="📥 Download radar image",
                     data=radar_png,
@@ -2949,9 +3012,10 @@ replaced by the series score.
     st.markdown(
         """
 The left side shows the **Season** table (ORTG, DRTG, NETRTG, REB%, AST%) and the
-**Where the game can swing** block. The right side shows a **radar**: the season profile of the
-two teams, then their last five games from Round 13, when recent form starts to differ from the
-season.
+**Where the game can swing** block. The right side shows a **radar** of the two teams over their
+last five games, to compare current form with the season figures on the left. From Round 13, small
+bars inside the Season cells also show how the last five games compare with the season: the dot is
+the season value, the end of the line is the last five games, green when better and red when worse.
 
 **Where the game can swing** picks the three most telling battles between one team's attack and
 the other team's defense, on the Four Factors: shooting (eFG% against Opp eFG%), turnovers (TOV%
