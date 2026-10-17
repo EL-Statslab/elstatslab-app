@@ -213,6 +213,19 @@ def _autocrop_logo(img_arr):
 # GAMEFLOW
 # =============================================================================
 @st.cache_data(ttl=DB_TTL)
+def _final_score(all_games: pd.DataFrame, home: str, gameday: int):
+    """(home score, away score) of the game, from the team games already loaded."""
+    try:
+        sub = all_games[(all_games["team"].str.upper() == home.upper())
+                        & (all_games["gameday"] == gameday)]
+        if sub.empty:
+            return None
+        r = sub.iloc[0]
+        return int(r["score"]), int(r["opp_score"])
+    except Exception:
+        return None
+
+
 def _gamecode_num(raw_gc) -> int:
     """Game number from the schedule gamecode ("E2025_57" or 57)."""
     if isinstance(raw_gc, str) and "_" in raw_gc:
@@ -2469,6 +2482,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     side_dl_label = "📥 Download radar image"
     side_dl_name = f"Radar_R{rnd}_{hcode}_vs_{acode}.png"
     gameflow_on_side = False        # Game Flow already shown next to the tables
+    decided = None
 
     toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
     if toggle_key not in st.session_state:
@@ -2710,6 +2724,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                         form_gauges=use_form,
                         season=int(rnd_season),
                         db_path=str(DB_PATH),
+                        decided=decided if played else None,
+                        final_score=_final_score(all_games, home, int(rnd)) if played else None,
                     )
                 st.rerun()
 
