@@ -96,7 +96,7 @@ SWING_FACTORS = [
     ("oreb", "dreb", "REBOUNDING", "OREB%", "DREB%"),
     ("ftr", "opp_ftr", "FREE THROWS", "FT Rate", "Opp FT Rate"),
 ]
-SWING_EDGE_MIN = 30     # percentile gap to call a battle an edge in the selection
+SWING_EDGE_MIN = 30     # under this percentile gap, two strong sides make a CLASH
 SWING_VERDICT_MIN = 15  # smaller gaps are shown as EVEN (or CLASH when both are strong)
 SWING_CLASH_MIN = 75    # both sides at least this percentile: strength against strength
 # Same database as the site first (Team Rankings reads euroleague_public.db)
@@ -468,22 +468,19 @@ def swing_battles(home_code: str, away_code: str, season: Optional[int] = None,
                               "edge": op - dp, "clash": min(op, dp)})
         if not cands:
             return None
-        edges = sorted([c for c in cands if abs(c["edge"]) >= SWING_EDGE_MIN],
-                       key=lambda c: -abs(c["edge"]))
-        clashes = sorted([c for c in cands if c["clash"] >= SWING_CLASH_MIN
-                          and abs(c["edge"]) < SWING_EDGE_MIN], key=lambda c: -c["clash"])
+        # Interest of a battle: the gap between the attack and the defense, plus how far
+        # the most striking of the two stands from the league middle (a 1st or a last
+        # weighs a lot, a 10th almost nothing), plus a bonus when both sides are strong
+        # (a clash has a small gap by nature, but strength against strength is a story).
+        # Highest interest first, one row per factor.
+        for c in cands:
+            standout = max(abs(c["off_pct"] - 50), abs(c["def_pct"] - 50))
+            both_strong = max(0.0, min(c["off_pct"], c["def_pct"]) - 50)
+            c["interest"] = abs(c["edge"]) + standout + both_strong
         chosen = []
-
-        def add(c):
+        for c in sorted(cands, key=lambda c: -c["interest"]):
             if len(chosen) < 3 and c["factor"] not in {x["factor"] for x in chosen}:
                 chosen.append(c)
-
-        for c in edges[:2]:
-            add(c)
-        for c in clashes[:1]:
-            add(c)
-        for c in edges[2:] + sorted(cands, key=lambda c: -abs(c["edge"])):
-            add(c)
         for c in chosen:
             if c["clash"] >= SWING_CLASH_MIN and abs(c["edge"]) < SWING_EDGE_MIN:
                 c["winner"] = None
