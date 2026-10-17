@@ -2672,8 +2672,17 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                               key=f"sec_{card_index}_{rnd}_{hcode}_{acode}")
             if choice:
                 # the chosen block opens straight away (no second click on its expander)
+                # only the outer one: nested ones (Full ranking...) keep their own default
                 _orig_expander = st.expander
-                st.expander = lambda *a, **k: _orig_expander(*a, **{**k, "expanded": True})
+                _first = [True]
+
+                def _open_first(*a, **k):
+                    if _first[0]:
+                        _first[0] = False
+                        k = {**k, "expanded": True}
+                    return _orig_expander(*a, **k)
+
+                st.expander = _open_first
                 try:
                     sections[choice]()
                 finally:
