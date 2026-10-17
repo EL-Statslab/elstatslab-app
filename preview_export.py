@@ -19,16 +19,27 @@ Layout of the comparison area:
     upcoming RS game, gauges off      one centred Season table (before the
                                       LAST5_MIN_ROUND threshold set in app.py)
     upcoming Play-In / Playoffs / FF  two tables: Season and Last 5
+
+"Where the game can swing" block (upcoming regular season games, SWING_BLOCK on):
+    the Season table keeps ORTG, DRTG, NETRTG, REB% and AST%, and a second block
+    shows 3 battles "attack of one team against the defense of the other" on the
+    Four Factors (eFG%, TOV%, OREB%, FT Rate), with league ranks. The figures come
+    from team_rankings.compute_team_table, so they are exactly the ones of the Team
+    Rankings tab and PNG. app.py does not change. If anything is missing (database,
+    team_rankings.py), the block is skipped and the card is drawn exactly as before.
 """
 
 import io
+import sqlite3
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib import font_manager
-from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
+from matplotlib.patches import Circle, FancyBboxPatch, Polygon, Rectangle
 from matplotlib.textpath import TextPath
 from PIL import Image
 
@@ -73,6 +84,24 @@ RULE = "#E1D8C6"
 NAVY = "#14213D"
 ORANGE = "#E4572E"
 GREY = "#6B7280"
+
+# "Where the game can swing" block
+SWING_BLOCK = True                      # False: card exactly as before
+SWING_TABLE_METRICS = ["ORTG", "DRTG", "NETRTG", "REB%", "AST%"]
+# (attack key, defense key, family label, attack label, defense label)
+# Keys and labels are those of team_rankings.METRICS, so both visuals read the same.
+SWING_FACTORS = [
+    ("efg", "opp_efg", "SHOOTING", "eFG%", "Opp eFG%"),
+    ("tov", "opp_tov", "TURNOVERS", "TOV%", "Opp TOV%"),
+    ("oreb", "dreb", "REBOUNDING", "OREB%", "DREB%"),
+    ("ftr", "opp_ftr", "FREE THROWS", "FT Rate", "Opp FT Rate"),
+]
+SWING_EDGE_MIN = 30     # percentile gap to call a battle an edge in the selection
+SWING_VERDICT_MIN = 15  # smaller gaps are shown as EVEN (or CLASH when both are strong)
+SWING_CLASH_MIN = 75    # both sides at least this percentile: strength against strength
+# Same database as the site first (Team Rankings reads euroleague_public.db)
+SWING_DB_CANDIDATES = ["euroleague_public.db", "euroleague.db", "../euroleague.db",
+                       r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db"]
 
 # Canvas: design units, 1000 wide by 1250 high (4:5, the largest ratio X shows uncropped)
 W, H = 1000, 1250
@@ -249,20 +278,25 @@ def _draw_team(ax, cx, code, name, rank, wl, form, show_record, colour=NAVY):
                                    facecolor=EL_GREEN if win else EL_RED, edgecolor="none", zorder=3))
 
 
-def _draw_table(ax, x0, width, title, h_stats, a_stats, home_label, away_label, y0, row_h):
+def _draw_table(ax, x0, width, title, h_stats, a_stats, home_label, away_label, y0, row_h,
+                metrics=None, show_labels=True):
     """Three columns: home value, metric, away value."""
+    metrics = metrics or METRICS
     cell_w = (width - 10) * 0.34
     mid_w = width - 2 * cell_w - 12
     xh = x0
     xm = x0 + cell_w + 6
     xa = xm + mid_w + 6
-    _text(ax, x0 + width / 2, y0 - 62, title, 30, BARLOW_BOLD, NAVY, ha="center")
-    size = max(11, min(22, cell_w * 2.2 / max(len(home_label), len(away_label), 1)))
-    for cx, lab in ((xh + cell_w / 2, home_label), (xa + cell_w / 2, away_label)):
-        _text(ax, cx, y0 - 26, lab, size, BARLOW_SEMIBOLD, GREY, ha="center")
+    if show_labels:
+        _text(ax, x0 + width / 2, y0 - 62, title, 30, BARLOW_BOLD, NAVY, ha="center")
+        size = max(11, min(22, cell_w * 2.2 / max(len(home_label), len(away_label), 1)))
+        for cx, lab in ((xh + cell_w / 2, home_label), (xa + cell_w / 2, away_label)):
+            _text(ax, cx, y0 - 26, lab, size, BARLOW_SEMIBOLD, GREY, ha="center")
+    else:
+        _text(ax, x0 + width / 2, y0 - 26, title, 30, BARLOW_BOLD, NAVY, ha="center")
     ax.plot([x0, x0 + width], [y0 - 8, y0 - 8], color=NAVY, lw=1.6, zorder=2)
 
-    for i, m in enumerate(METRICS):
+    for i, m in enumerate(metrics):
         y = y0 + i * row_h
         hv, av = h_stats.get(m), a_stats.get(m)
         h_int, a_int = colour_intensity(hv, av, m)
@@ -272,7 +306,7 @@ def _draw_table(ax, x0, width, title, h_stats, a_stats, home_label, away_label, 
             txt = f"{val:.1f}" if val is not None else "n/a"
             _text(ax, cx0 + cell_w / 2, y + cell_h / 2 + 1, txt, 36, BARLOW_BOLD, NAVY, ha="center")
         _text(ax, xm + mid_w / 2, y + cell_h / 2 + 1, m, 28, BARLOW_SEMIBOLD, NAVY, ha="center")
-        if i < len(METRICS) - 1:
+        if i < len(metrics) - 1:
             ax.plot([xm + 14, xm + mid_w - 14], [y + cell_h + 4] * 2, color=RULE, lw=1, zorder=1)
 
 
@@ -348,6 +382,199 @@ def _draw_table_form(ax, x0, width, title, h_stats, a_stats, h_recent, a_recent,
 
 
 # =============================================================================
+# "WHERE THE GAME CAN SWING": FOUR FACTORS BATTLES
+# =============================================================================
+def _has_tables(path: Path) -> bool:
+    try:
+        con = sqlite3.connect(str(path))
+        names = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        con.close()
+        return {"schedule", "team_stats"} <= names
+    except Exception:
+        return False
+
+
+def _find_db(db_path=None) -> Optional[Path]:
+    cands = [db_path] if db_path else []
+    cands += SWING_DB_CANDIDATES
+    for c in cands:
+        if not c:
+            continue
+        p = _resolve(c)
+        if p.exists() and _has_tables(p):
+            return p
+    here = Path(__file__).resolve().parent
+    for folder in (Path.cwd(), here):
+        for p in sorted(folder.glob("*.db")):
+            if _has_tables(p):
+                return p
+    return None
+
+
+@lru_cache(maxsize=8)
+def _season_factors(db: str, mtime: float, season: Optional[int]):
+    """Four Factors of every team (attack and defense) from the Team Rankings tab,
+    with their percentile (100 = best) and league rank (1 = best)."""
+    import team_rankings as tr          # imported here to keep this module light
+
+    con = sqlite3.connect(db)
+    try:
+        if season is None:
+            season = tr._current_season(con)
+        if season is None:
+            return season, {}
+        values, pct, _ = tr.compute_team_table(con, season)
+    finally:
+        con.close()
+    if values is None:
+        return season, {}
+    out = {}
+    for key, (_, higher_better, _) in tr.METRICS.items():
+        col = values[key]
+        goodness = col if higher_better else -col
+        rank = goodness.rank(ascending=False, method="min")
+        for code in values.index:
+            d = out.setdefault(str(code), {})
+            v, p, r = col.get(code), pct[key].get(code), rank.get(code)
+            d[key] = None if pd.isna(v) else float(v)
+            d[key + "_pct"] = None if pd.isna(p) else float(p)
+            d[key + "_rank"] = None if pd.isna(r) else int(r)
+    return season, out
+
+
+def swing_battles(home_code: str, away_code: str, season: Optional[int] = None,
+                  db_path=None) -> Optional[list]:
+    """The 3 battles shown in the block, or None when the data is not available."""
+    try:
+        db = _find_db(db_path)
+        if db is None:
+            return None
+        season, f = _season_factors(str(db), db.stat().st_mtime, season)
+        h, a = f.get(home_code), f.get(away_code)
+        if not h or not a:
+            return None
+        cands = []
+        for off, dfn, fam, off_lab, def_lab in SWING_FACTORS:
+            for att, dft, side in ((h, a, "home"), (a, h, "away")):
+                op, dp = att.get(off + "_pct"), dft.get(dfn + "_pct")
+                if op is None or dp is None:
+                    continue
+                cands.append({"factor": off, "family": fam, "attacker": side,
+                              "off_val": att[off], "off_pct": op, "off_lab": off_lab,
+                              "off_rank": att.get(off + "_rank"),
+                              "def_val": dft[dfn], "def_pct": dp, "def_lab": def_lab,
+                              "def_rank": dft.get(dfn + "_rank"),
+                              "edge": op - dp, "clash": min(op, dp)})
+        if not cands:
+            return None
+        edges = sorted([c for c in cands if abs(c["edge"]) >= SWING_EDGE_MIN],
+                       key=lambda c: -abs(c["edge"]))
+        clashes = sorted([c for c in cands if c["clash"] >= SWING_CLASH_MIN
+                          and abs(c["edge"]) < SWING_EDGE_MIN], key=lambda c: -c["clash"])
+        chosen = []
+
+        def add(c):
+            if len(chosen) < 3 and c["factor"] not in {x["factor"] for x in chosen}:
+                chosen.append(c)
+
+        for c in edges[:2]:
+            add(c)
+        for c in clashes[:1]:
+            add(c)
+        for c in edges[2:] + sorted(cands, key=lambda c: -abs(c["edge"])):
+            add(c)
+        for c in chosen:
+            if c["clash"] >= SWING_CLASH_MIN and abs(c["edge"]) < SWING_EDGE_MIN:
+                c["winner"] = None
+                c["verdict"] = "CLASH"
+            elif abs(c["edge"]) >= SWING_VERDICT_MIN:
+                att_wins = c["edge"] > 0
+                c["winner"] = c["attacker"] if att_wins else ("away" if c["attacker"] == "home" else "home")
+                c["verdict"] = "EDGE"
+            else:
+                c["winner"] = None
+                c["verdict"] = "EVEN"
+        return chosen
+    except Exception:
+        return None
+
+
+def _ordinal(p: float) -> str:
+    n = int(round(p))
+    suf = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
+def _abbr(code: str) -> str:
+    """Short TV style name from the logo file (OLY, FEN, RMD...), else the code."""
+    f = LOGO_MAP.get(code)
+    return Path(f).stem.upper() if f else code
+
+
+def _triangle(ax, x, y, direction, colour, size=9):
+    """Small solid triangle pointing left (-1) or right (+1), its tip at x."""
+    base = x - direction * size * 1.3
+    ax.add_patch(Polygon([[base, y - size], [base, y + size], [x, y]], closed=True,
+                         facecolor=colour, edgecolor="none", zorder=5))
+
+
+def _draw_swing(ax, battles, y_top, home_code, away_code):
+    """One row per battle. Home team always on the left, away team on the right.
+    The cell labels say who attacks (OREB% against DREB%...). The only marker is the
+    verdict, whose triangle points towards the team that wins the battle, and the
+    winning cell gets an outline in that team's colour."""
+    x0, width = 120, 760
+    cell_w = (width - 10) * 0.34
+    mid_w = width - 2 * cell_w - 12
+    xh = x0
+    xm = x0 + cell_w + 6
+    xa = xm + mid_w + 6
+    cx = xm + mid_w / 2
+    _text(ax, 500, y_top, "Where the game can swing", 30, BARLOW_BOLD, NAVY, ha="center")
+    ax.plot([x0, x0 + width], [y_top + 18, y_top + 18], color=NAVY, lw=1.6, zorder=2)
+    row_h, cell_h = 66, 58
+    y = y_top + 30
+    for i, b in enumerate(battles):
+        home_att = b["attacker"] == "home"
+        off = (b["off_val"], b["off_pct"], b["off_lab"], b["off_rank"])
+        dfn = (b["def_val"], b["def_pct"], b["def_lab"], b["def_rank"])
+        left, right = (off, dfn) if home_att else (dfn, off)
+        for side, (val, pct, lab, rank), cx0 in (("home", left, xh), ("away", right, xa)):
+            _rbox(ax, cx0, y, cell_w, cell_h, cell_colour((pct - 50) / 50), r=10, z=2)
+            if b["verdict"] == "EDGE" and b["winner"] == side:
+                _rbox(ax, cx0, y, cell_w, cell_h, "none", ec=NAVY if side == "home" else ORANGE,
+                      r=10, lw=3.2, z=3)
+            shown = f"{val:.1f}" if "FT Rate" in lab else f"{val:.1f}%"
+            _text(ax, cx0 + cell_w / 2, y + 28, shown, 28, BARLOW_BOLD, NAVY, ha="center")
+            sub = f"{lab} · {_ordinal(rank)}" if rank else lab
+            _text(ax, cx0 + cell_w / 2, y + 49, sub, 15, BARLOW_SEMIBOLD, NAVY, ha="center")
+
+        _text(ax, cx, y + 20, b["family"], 19, BARLOW_SEMIBOLD, NAVY, ha="center")
+        vy, vsize = y + 46, 21
+        if b["verdict"] == "EDGE":
+            home_wins = b["winner"] == "home"
+            vtxt = f"EDGE {_abbr(home_code if home_wins else away_code)}"
+            vcol = NAVY if home_wins else ORANGE
+        else:
+            vtxt, vcol = b["verdict"], GREY
+        _text(ax, cx, vy, vtxt, vsize, BARLOW_BOLD, vcol, ha="center")
+        half = _text_w(vtxt, vsize, BARLOW_BOLD) / 2
+        ty = vy - 7                                   # middle of the capital letters
+        if b["verdict"] == "EDGE":
+            if b["winner"] == "home":
+                _triangle(ax, cx - half - 22, ty, -1, vcol)
+            else:
+                _triangle(ax, cx + half + 22, ty, +1, vcol)
+        elif b["verdict"] == "CLASH":
+            _triangle(ax, cx - half - 22, ty, -1, vcol)
+            _triangle(ax, cx + half + 22, ty, +1, vcol)
+        if i < len(battles) - 1:
+            ax.plot([xm + 14, xm + mid_w - 14], [y + row_h - 3] * 2, color=RULE, lw=1, zorder=1)
+        y += row_h
+    return y
+
+
+# =============================================================================
 # MAIN EXPORT
 # =============================================================================
 def build_preview_png(home_code: str, home_name: str, home_rank: int,
@@ -362,7 +589,10 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       right_label: str = "Last 5",
                       round_: str = "RS",
                       series_score: dict = None,
-                      form_gauges: bool = False) -> bytes:
+                      form_gauges: bool = False,
+                      swing: Optional[bool] = None,
+                      season: Optional[int] = None,
+                      db_path=None) -> bytes:
     fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, facecolor=PAPER)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
@@ -400,10 +630,19 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         _text(ax, 500, 254, "VS", 84, BARLOW_BOLD, NAVY, ha="center")
 
     # ── Comparison tables ───────────────────────────────────────────────
-    use_gauges = bool(form_gauges) and bool(h_right) and bool(a_right)
+    want_swing = SWING_BLOCK if swing is None else bool(swing)
+    battles = None
+    if want_swing and show_prediction and round_ == "RS":
+        battles = swing_battles(home_code, away_code, season=season, db_path=db_path)
+    use_gauges = bool(form_gauges) and bool(h_right) and bool(a_right) and not battles
     row_h = 56 if show_prediction else 72
     y0 = 536
-    if use_gauges:
+    if battles:
+        row_h, y0 = 50, 508
+        _draw_table(ax, 120, 760, "Season", h_season, a_season, home_name, away_name, y0, row_h,
+                    metrics=SWING_TABLE_METRICS, show_labels=False)
+        _draw_swing(ax, battles, y0 + len(SWING_TABLE_METRICS) * row_h + 34, home_code, away_code)
+    elif use_gauges:
         row_h, y0 = 52, 560
         _draw_table_form(ax, 120, 760, "Season", h_season, a_season, h_right, a_right,
                          home_name, away_name, y0, row_h)
@@ -422,7 +661,23 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
             _draw_table(ax, 520, 430, right_label, h_right, a_right, home_name, away_name, y0, row_h)
 
     # ── Win probability ─────────────────────────────────────────────────
-    if show_prediction:
+    if show_prediction and battles:
+        # version compacte quand le bloc "Where the game can swing" est affiche
+        label = "Win probability"
+        py = 1064
+        _text(ax, 500, py, label, 28, BARLOW_BOLD, NAVY, ha="center")
+        bx, bw, by, bh = 80, 840, py + 20, 24
+        split = bw * float(home_prob)
+        ax.add_patch(Rectangle((bx, by), split, bh, facecolor=NAVY, zorder=2))
+        ax.add_patch(Rectangle((bx + split, by), bw - split, bh, facecolor=ORANGE, zorder=2))
+        ax.plot([bx + split] * 2, [by - 5, by + bh + 5], color=PAPER, lw=3, zorder=3)
+        hp, ap_ = f"{home_prob * 100:.1f}%", f"{away_prob * 100:.1f}%"
+        _text(ax, bx, by + 60, hp, 44, BARLOW_BOLD, NAVY)
+        _text(ax, bx + _text_w(hp, 44, BARLOW_BOLD) + 12, by + 60, home_name, 22, BARLOW_REGULAR, GREY)
+        _text(ax, bx + bw, by + 60, ap_, 44, BARLOW_BOLD, ORANGE, ha="right")
+        _text(ax, bx + bw - _text_w(ap_, 44, BARLOW_BOLD) - 12, by + 60, away_name, 22,
+              BARLOW_REGULAR, GREY, ha="right")
+    elif show_prediction:
         label = "Win probability" if round_ == "RS" else "Match edge"
         if round_ == "FF":
             label += " (neutral court)"
