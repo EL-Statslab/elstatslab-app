@@ -3909,10 +3909,17 @@ def render_return_invite() -> None:
         "target='_blank' "
         "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
         "read the story behind the project on Substack</a>."
+        "</div>"
+        "<div style='margin-top:14px;padding-top:12px;border-top:1px solid #E1D8C6;"
+        "font-size:.95rem;color:#14213D;line-height:1.45;'>"
+        "ELSTATSLAB is built and run by one person in his spare time. "
+        "If you enjoy it, you can "
+        "<a href='https://ko-fi.com/elstatslab' target='_blank' "
+        "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
+        "buy me a coffee on Ko-fi</a>. Thank you for the support!"
         "</div></div>",
         unsafe_allow_html=True,
     )
-
 
 def main():
     _t_main = _time.perf_counter()
