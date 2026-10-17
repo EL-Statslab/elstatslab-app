@@ -1817,11 +1817,13 @@ def _radar_items(stats: dict) -> tuple:
 def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
                           battles: list | None = None,
                           h_recent: dict | None = None, a_recent: dict | None = None,
-                          gauges: bool = False):
+                          gauges: bool = False, radar_png: bytes | None = None):
     """Season table and "Where the game can swing" drawn by the same code, so every
     cell has the same width and height in both blocks. Home team on the left, away
     team on the right. With gauges on (from LAST5_MIN_ROUND), each Season cell also
-    carries the Last 5 bar: dot = season value, line end = Last 5 value."""
+    carries the Last 5 bar: dot = season value, line end = Last 5 value.
+    With radar_png, the radar sits on the right and takes exactly the height of the
+    tables (on a narrow screen it goes under them at its normal size)."""
     navy, orange, grey = "#14213D", "#E4572E", "#6B7280"
     if not h_stats or not a_stats:
         st.info("Not enough games yet for this scope.")
@@ -1868,8 +1870,10 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
              "margin:10px 0 2px 0;'>{}</div>")
 
     def td(inner, background, outline=None):
-        border = f"3px solid {outline}" if outline else "3px solid transparent"
-        return f"<td style='{CELL}background:{background};border:{border};'>{inner}</td>"
+        # inset shadow instead of a border: the site theme overrides cell borders
+        ring = f"box-shadow:inset 0 0 0 3px {outline};" if outline else "box-shadow:none;"
+        return (f"<td style='{CELL}background:{background};border:none !important;{ring}'>"
+                f"{inner}</td>")
 
     # ---- Season
     rows = ""
@@ -1886,12 +1890,13 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
             cells.append(td(inner, bg(inten)))
         rows += (f"<tr>{cells[0]}<td style='{MID}font-weight:600;font-size:1rem;'>{m}</td>"
                  f"{cells[1]}</tr>")
+    TH = ("height:48px;box-sizing:border-box;font-size:1.05rem;font-weight:700;"
+          "text-align:center;vertical-align:middle;white-space:nowrap;overflow:hidden;"
+          "text-overflow:ellipsis;padding:0 6px;border:none !important;")
     head = ("<tr>"
-            f"<th style='font-size:0.85rem;font-weight:600;color:{navy};text-align:center;"
-            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;'>{home}</th>"
-            "<th></th>"
-            f"<th style='font-size:0.85rem;font-weight:600;color:{orange};text-align:center;"
-            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px;'>{away}</th>"
+            f"<th style='{TH}color:{navy};'>{home}</th>"
+            f"<th style='{TH}color:{navy};'>METRIC</th>"
+            f"<th style='{TH}color:{orange};'>{away}</th>"
             "</tr>")
     legend = ""
     if gauges:
@@ -1940,7 +1945,26 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
                  "Each row puts one team's attack against the other's defense. "
                  "Ranks among all teams this season.</div>")
 
-    st.markdown(f"<div style='width:100%;'>{html}</div>", unsafe_allow_html=True)
+    if radar_png is None:
+        st.markdown(f"<div style='width:100%;'>{html}</div>", unsafe_allow_html=True)
+        return
+
+    b64 = base64.b64encode(radar_png).decode("ascii")
+    st.markdown(
+        "<style>"
+        ".esl-mx{display:flex;gap:28px;align-items:stretch;width:100%;}"
+        ".esl-mx-left{flex:1 1 0;min-width:0;}"
+        ".esl-mx-right{flex:1 1 0;min-width:0;position:relative;}"
+        ".esl-mx-right img{position:absolute;inset:0;width:100%;height:100%;"
+        "object-fit:contain;object-position:center top;}"
+        "@media (max-width: 760px){.esl-mx{flex-direction:column;}"
+        ".esl-mx-right{aspect-ratio:6/6.6;}}"
+        "</style>"
+        f"<div class='esl-mx'><div class='esl-mx-left'>{html}</div>"
+        f"<div class='esl-mx-right'><img src='data:image/png;base64,{b64}' alt='Radar'/></div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # =============================================================================
@@ -2315,22 +2339,25 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                 and bool(h_recent) and bool(a_recent))
 
     if swing_layout:
-        col1, col2 = st.columns(2)
-        with col1:
-            battles = swing_battles(hcode, acode, season=int(rnd_season), db_path=str(DB_PATH))
-            # From LAST5_MIN_ROUND the Season cells also carry the Last 5 bars
-            render_matchup_tables(home_disp, away_disp, h_season, a_season, battles,
-                                  h_recent=h_recent, a_recent=a_recent, gauges=use_form)
-        with col2:
-            # Radar of the last 5 games (the season if a team has not played yet)
-            if h_recent and a_recent:
-                r_title, r_h, r_a = f"Last {ROLLING_WINDOW}", h_recent, a_recent
-            else:
-                r_title, r_h, r_a = "Season", h_season, a_season
-            try:
-                radar_png = cached_radar_png(home_disp, away_disp, _radar_items(r_h),
-                                             _radar_items(r_a), r_title)
-                st.image(radar_png, use_container_width=True)
+        battles = swing_battles(hcode, acode, season=int(rnd_season), db_path=str(DB_PATH))
+        # Radar of the last 5 games (the season if a team has not played yet)
+        if h_recent and a_recent:
+            r_title, r_h, r_a = f"Last {ROLLING_WINDOW}", h_recent, a_recent
+        else:
+            r_title, r_h, r_a = "Season", h_season, a_season
+        try:
+            radar_png = cached_radar_png(home_disp, away_disp, _radar_items(r_h),
+                                         _radar_items(r_a), r_title)
+        except Exception:
+            radar_png = None
+        # Tables on the left (Last 5 bars inside the Season cells from LAST5_MIN_ROUND),
+        # radar on the right at the same height
+        render_matchup_tables(home_disp, away_disp, h_season, a_season, battles,
+                              h_recent=h_recent, a_recent=a_recent, gauges=use_form,
+                              radar_png=radar_png)
+        if radar_png is not None:
+            _c1, _c2 = st.columns(2)
+            with _c2:
                 st.download_button(
                     label="📥 Download radar image",
                     data=radar_png,
@@ -2338,8 +2365,6 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     mime="image/png",
                     key=f"radar_dl_{card_index}_{rnd}_{hcode}_{acode}",
                 )
-            except Exception:
-                st.caption("Radar unavailable for this game.")
     elif use_form and not use_radar:
         render_comparison_form(home_disp, away_disp, h_season, a_season,
                                h_recent, a_recent)
