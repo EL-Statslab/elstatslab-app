@@ -1862,12 +1862,21 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
     SUB = "font-weight:600;font-size:0.75rem;line-height:1.25;"
     MID = (f"height:62px;box-sizing:border-box;text-align:center;vertical-align:middle;"
            f"color:{navy};padding:2px;")
+    # Every height of the left column is fixed in pixels, so its total height is known
+    # here and the radar can be given exactly that height.
+    ROW_H, HEAD_H, GAP, TITLE_H, LEGEND_H, NOTE_H = 62, 48, 6, 34, 20, 20
+
+    def box(inner, height):
+        return (f"<div style='height:{height}px;overflow:hidden;margin:0;padding:0;'>"
+                f"{inner}</div>")
+
     TABLE = ("<table style='width:100%;border-collapse:separate;border-spacing:0 6px;"
              "table-layout:fixed;margin:0;'>"
              "<colgroup><col style='width:37%;'><col style='width:26%;'>"
              "<col style='width:37%;'></colgroup>")
-    TITLE = (f"<div style='font-weight:700;font-size:1.15rem;color:{navy};"
-             "margin:10px 0 2px 0;'>{}</div>")
+    TITLE = (f"<div style='height:34px;box-sizing:border-box;display:flex;align-items:flex-end;"
+             f"padding-bottom:2px;font-weight:700;font-size:1.15rem;line-height:1.2;color:{navy};'>"
+             "{}</div>")
 
     def td(inner, background, outline=None):
         # inset shadow instead of a border: the site theme overrides cell borders
@@ -1900,11 +1909,15 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
             "</tr>")
     legend = ""
     if gauges:
-        legend = (f"<div style='font-size:0.8rem;color:{grey};margin-bottom:2px;'>"
+        legend = (f"<div style='height:20px;overflow:hidden;font-size:0.8rem;line-height:20px;"
+                  f"color:{grey};'>"
                   "Bars: dot = season, line end = last 5 games "
                   "(<span style='color:#2ea043;font-weight:700;'>green</span> better, "
                   "<span style='color:#da3633;font-weight:700;'>red</span> worse)</div>")
-    html = TITLE.format("Season") + legend + TABLE + f"<thead>{head}</thead><tbody>{rows}</tbody></table>"
+    season_h = HEAD_H + len(metrics) * ROW_H + (len(metrics) + 2) * GAP
+    html = (TITLE.format("Season") + legend
+            + box(TABLE + f"<thead>{head}</thead><tbody>{rows}</tbody></table>", season_h))
+    total_h = TITLE_H + (LEGEND_H if gauges else 0) + season_h
 
     # ---- Where the game can swing
     if battles:
@@ -1940,8 +1953,12 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
                    f"<div style='font-size:1rem;font-weight:700;color:{col};white-space:nowrap;'>"
                    f"{verdict}</div></td>")
             rows += f"<tr>{cells[0]}{mid}{cells[1]}</tr>"
-        html += (TITLE.format("Where the game can swing") + TABLE + f"<tbody>{rows}</tbody></table>"
-                 f"<div style='font-size:0.75rem;color:{grey};margin-top:2px;'>"
+        swing_h = len(battles) * ROW_H + (len(battles) + 1) * GAP
+        total_h += TITLE_H + swing_h + NOTE_H
+        html += (TITLE.format("Where the game can swing")
+                 + box(TABLE + f"<tbody>{rows}</tbody></table>", swing_h)
+                 + f"<div style='height:20px;overflow:hidden;font-size:0.75rem;line-height:20px;"
+                 f"color:{grey};'>"
                  "Each row puts one team's attack against the other's defense. "
                  "Ranks among all teams this season.</div>")
 
@@ -1950,17 +1967,19 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
         return
 
     b64 = base64.b64encode(radar_png).decode("ascii")
+    radar_w = round(total_h * 6.0 / 6.6)        # the radar image is 6 x 6.6 inches
     st.markdown(
         "<style>"
         # the radar column takes the height of the tables and, through its aspect
         # ratio, exactly the width that height needs: no empty space around it
-        ".esl-mx{display:flex;gap:28px;align-items:stretch;justify-content:center;width:100%;}"
+        ".esl-mx{display:flex;gap:28px;align-items:flex-start;justify-content:center;width:100%;}"
         ".esl-mx-left{flex:1 1 auto;min-width:0;max-width:820px;}"
-        ".esl-mx-right{flex:0 0 auto;aspect-ratio:6/6.6;position:relative;}"
-        ".esl-mx-right img{position:absolute;inset:0;width:100%;height:100%;"
-        "object-fit:contain;}"
-        "@media (max-width: 760px){.esl-mx{flex-direction:column;}"
-        ".esl-mx-left{max-width:none;}.esl-mx-right{width:100%;}}"
+        f".esl-mx-right{{flex:0 0 auto;width:{radar_w}px;height:{total_h}px;}}"
+        ".esl-mx-right img{display:block;width:100%;height:100%;object-fit:contain;}"
+        # below this width the tables would be too narrow next to the radar: stack them
+        "@media (max-width: 1300px){.esl-mx{flex-direction:column;align-items:center;}"
+        ".esl-mx-left{max-width:none;width:100%;}"
+        ".esl-mx-right{width:100%;max-width:640px;height:auto;}.esl-mx-right img{height:auto;}}"
         "</style>"
         f"<div class='esl-mx'><div class='esl-mx-left'>{html}</div>"
         f"<div class='esl-mx-right'><img src='data:image/png;base64,{b64}' alt='Radar'/></div>"
