@@ -12,6 +12,13 @@ optional form_gauges flag (Last 5 gauges inside the Season table):
 
 Self contained on purpose (no import from app.py, so no circular import).
 Run from the ELSTATSLAB_APP folder so that Logos/ and fonts/ resolve.
+
+Layout of the comparison area:
+    played game                       two tables: Season and This Game
+    upcoming RS game, gauges on       one Season table with Last 5 gauges
+    upcoming RS game, gauges off      one centred Season table (before the
+                                      LAST5_MIN_ROUND threshold set in app.py)
+    upcoming Play-In / Playoffs / FF  two tables: Season and Last 5
 """
 
 import io
@@ -402,6 +409,12 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                          home_name, away_name, y0, row_h)
     else:
         single = _same_stats(h_season, h_right) and _same_stats(a_season, a_right)
+        # Upcoming regular season game with the gauges off (before LAST5_MIN_ROUND in
+        # app.py): the Season table is shown alone, centred, whatever the Last 5 figures are.
+        # The Last 5 table stays for the Play-In, Playoffs and Final Four, and the
+        # This Game table stays for games already played.
+        if show_prediction and round_ == "RS":
+            single = True
         if single:
             _draw_table(ax, 120, 760, "Season", h_season, a_season, home_name, away_name, y0, row_h)
         else:
