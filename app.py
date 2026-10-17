@@ -8,6 +8,7 @@ Run locally:
 """
 
 import base64
+import time
 import io
 import ipaddress
 import json
@@ -65,6 +66,10 @@ ROLLING_WINDOW = 5
 LAST5_MIN_ROUND = 13
 # Gauges only draw a coloured line when the gap reaches this share of the metric scale
 LAST5_MIN_GAP = 0.30
+# True: under each match, a line shows how many seconds each block took (to find what is slow)
+PROFILE_MATCH = False
+# True: Impact Pulse, Lineups and Shot Map computed only when chosen (fast match page)
+LAZY_MATCH_SECTIONS = True
 # Visual on the right of the post-game tables: "gameflow" (Game Flow chart) or "radar"
 # (radar of the game). Change this one word to go back to the radar.
 POSTGAME_SIDE = "gameflow"
@@ -233,10 +238,16 @@ def _gamecode_num(raw_gc) -> int:
     return int(raw_gc)
 
 
+@st.cache_data(ttl=DB_TTL, show_spinner=False, max_entries=40)
+def _gameflow_png_cached(gamecode: int, season: int, round_label: str, aspect: str):
+    return render_gameflow_png(gamecode, season, round_label=round_label, aspect=aspect)
+
+
 def get_gameflow_png(gamecode: int, season: int, round_label: str = "",
                      aspect: str = "square") -> bytes | None:
+    # drawn once per game, then served from memory (every click on the page reruns it)
     try:
-        return render_gameflow_png(gamecode, season, round_label=round_label, aspect=aspect)
+        return _gameflow_png_cached(gamecode, season, round_label, aspect)
     except Exception as e:
         import traceback
         st.error(f"Game Flow error: {e}")
@@ -2384,6 +2395,12 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                           rnd_season: int = 2025):
     home, away = g["hometeam"], g["awayteam"]
     hcode, acode = g["homecode"], g["awaycode"]
+    _laps, _t = [], [time.perf_counter()]
+
+    def lap(label):
+        now = time.perf_counter()
+        _laps.append(f"{label} {now - _t[0]:.2f}s")
+        _t[0] = now
     home_disp = display_name(hcode, home)
     away_disp = display_name(acode, away)
     played = g["played"] == "true"
@@ -2433,6 +2450,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     a_recent = team_recent_stats(all_games, away, int(rnd))
     h_form = team_form_sequence(all_games, home)
     a_form = team_form_sequence(all_games, away)
+    lap("stats")
 
     series = None
     if is_playoffs and playoffs_schedule is not None:
@@ -2598,6 +2616,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                                              home_disp, away_disp,
                                              h_recent, a_recent)
 
+    lap("tables+radar")
     # ── Gameflow ──────────────────────────────────────────────────────────
     if played:
         gc_num = _gamecode_num(g["gamecode"])
@@ -2611,51 +2630,59 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                 with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
                     st.image(gf_png, use_container_width=True)
 
-        # ── Impact Pulse ──────────────────────────────────────────────────
+        lap("gameflow")
+        # Impact Pulse, Lineups and Shot Map are heavy (play by play, images). Streamlit
+        # computes the inside of a closed expander anyway, so they are chosen with a
+        # selector and only the chosen one is computed. LAZY_MATCH_SECTIONS = False
+        # brings back the three closed expanders.
+        def _impact():
+            render_impact_pulse_section(
+                gamecode=gc_num, season=rnd_season, home_code=hcode, away_code=acode,
+                home_disp=home_disp, away_disp=away_disp,
+                round_label=round_label_long, card_index=card_index)
+
+        def _lineups():
+            if LINEUPS_IN_MATCH and hasattr(lineup_tab, "render_match_lineups"):
+                lineup_tab.render_match_lineups(
+                    conn=get_conn(), season=rnd_season, game_code=gc_num,
+                    home_code=hcode, away_code=acode, home_disp=home_disp,
+                    away_disp=away_disp, round_label=round_label_long,
+                    card_index=card_index, elstatslab_logo=ELSTATSLAB_LOGO,
+                    team_logo_fn=logo_path, logo_zoom_fn=logo_zoom)
+
+        def _shotmap():
+            if SHOTMAPS_IN_MATCH and hasattr(shotmap_ui, "render_match_shotmaps"):
+                shotmap_ui.render_match_shotmaps(
+                    conn=get_conn(), season=rnd_season, game_code=gc_num,
+                    home_code=hcode, away_code=acode, home_disp=home_disp,
+                    away_disp=away_disp, round_label=round_label_long,
+                    card_index=card_index, elstatslab_logo=ELSTATSLAB_LOGO,
+                    team_logo_fn=logo_path)
+
         st.divider()
-        render_impact_pulse_section(
-            gamecode=gc_num,
-            season=rnd_season,
-            home_code=hcode,
-            away_code=acode,
-            home_disp=home_disp,
-            away_disp=away_disp,
-            round_label=round_label_long,
-            card_index=card_index,
-        )
-
-        # ── Lineups ───────────────────────────────────────────────────────
-        if LINEUPS_IN_MATCH and hasattr(lineup_tab, "render_match_lineups"):
-            lineup_tab.render_match_lineups(
-                conn=get_conn(),
-                season=rnd_season,
-                game_code=gc_num,
-                home_code=hcode,
-                away_code=acode,
-                home_disp=home_disp,
-                away_disp=away_disp,
-                round_label=round_label_long,
-                card_index=card_index,
-                elstatslab_logo=ELSTATSLAB_LOGO,
-                team_logo_fn=logo_path,
-                logo_zoom_fn=logo_zoom,
-            )
-
-        # ── Shot Map ──────────────────────────────────────────────────────
-        if SHOTMAPS_IN_MATCH and hasattr(shotmap_ui, "render_match_shotmaps"):
-            shotmap_ui.render_match_shotmaps(
-                conn=get_conn(),
-                season=rnd_season,
-                game_code=gc_num,
-                home_code=hcode,
-                away_code=acode,
-                home_disp=home_disp,
-                away_disp=away_disp,
-                round_label=round_label_long,
-                card_index=card_index,
-                elstatslab_logo=ELSTATSLAB_LOGO,
-                team_logo_fn=logo_path,
-            )
+        if LAZY_MATCH_SECTIONS:
+            sections = {"⚡ Impact Pulse": _impact}
+            if LINEUPS_IN_MATCH:
+                sections["🧩 Lineups"] = _lineups
+            if SHOTMAPS_IN_MATCH:
+                sections["🎯 Shot Map"] = _shotmap
+            st.caption("More on this game")
+            choice = st.pills("More on this game", list(sections), selection_mode="single",
+                              default=None, label_visibility="collapsed",
+                              key=f"sec_{card_index}_{rnd}_{hcode}_{acode}")
+            if choice:
+                # the chosen block opens straight away (no second click on its expander)
+                _orig_expander = st.expander
+                st.expander = lambda *a, **k: _orig_expander(*a, **{**k, "expanded": True})
+                try:
+                    sections[choice]()
+                finally:
+                    st.expander = _orig_expander
+        else:
+            _impact()
+            _lineups()
+            _shotmap()
+        lap("impact/lineups/shot map")
 
     st.divider()
 
@@ -2666,6 +2693,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         gc_num = int(raw_gc)
 
     pred = predict_by_gamecode(gc_num, rnd_season)
+    lap("prediction")
 
     if not played:
         if "error" in pred:
@@ -2675,6 +2703,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
         st.divider()
 
+    if PROFILE_MATCH:
+        st.caption("⏱ " + " · ".join(_laps))
     png_key = f"png_{card_index}_{rnd}_{hcode}_{acode}"
     # Upcoming regular season game: the image button and the radar button side by side
     if swing_radar_png is not None:
