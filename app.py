@@ -1967,19 +1967,24 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
         return
 
     b64 = base64.b64encode(radar_png).decode("ascii")
-    radar_w = round(total_h * 6.0 / 6.6)        # the radar image is 6 x 6.6 inches
+    # The radar runs from the top of the Season table (under its title, and under the
+    # legend of the bars) to the bottom of the last table (above the grey note).
+    radar_top = TITLE_H + (LEGEND_H if gauges else 0)
+    radar_h = total_h - radar_top - (NOTE_H if battles else 0)
+    radar_w = round(radar_h * 6.0 / 6.6)        # the radar image is 6 x 6.6 inches
     st.markdown(
         "<style>"
         # the radar column takes the height of the tables and, through its aspect
         # ratio, exactly the width that height needs: no empty space around it
         ".esl-mx{display:flex;gap:28px;align-items:flex-start;justify-content:center;width:100%;}"
         ".esl-mx-left{flex:1 1 auto;min-width:0;max-width:820px;}"
-        f".esl-mx-right{{flex:0 0 auto;width:{radar_w}px;height:{total_h}px;}}"
+        f".esl-mx-right{{flex:0 0 auto;width:{radar_w}px;height:{radar_h}px;margin-top:{radar_top}px;}}"
         ".esl-mx-right img{display:block;width:100%;height:100%;object-fit:contain;}"
         # below this width the tables would be too narrow next to the radar: stack them
         "@media (max-width: 1300px){.esl-mx{flex-direction:column;align-items:center;}"
         ".esl-mx-left{max-width:none;width:100%;}"
-        ".esl-mx-right{width:100%;max-width:640px;height:auto;}.esl-mx-right img{height:auto;}}"
+        ".esl-mx-right{width:100%;max-width:640px;height:auto;margin-top:12px;}"
+        ".esl-mx-right img{height:auto;}}"
         "</style>"
         f"<div class='esl-mx'><div class='esl-mx-left'>{html}</div>"
         f"<div class='esl-mx-right'><img src='data:image/png;base64,{b64}' alt='Radar'/></div>"
@@ -2337,6 +2342,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     # left, radar on the right, no toggle. Played games and the postseason keep the
     # toggle between tables and radar, as before.
     swing_layout = (not played) and phase == "RS"
+    swing_radar_png = None          # radar download, shown at the bottom next to the image one
 
     toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
     if toggle_key not in st.session_state:
@@ -2376,16 +2382,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         render_matchup_tables(home_disp, away_disp, h_season, a_season, battles,
                               h_recent=h_recent, a_recent=a_recent, gauges=use_form,
                               radar_png=radar_png)
-        if radar_png is not None:
-            _c1, _c2 = st.columns([3, 1])
-            with _c2:
-                st.download_button(
-                    label="📥 Download radar image",
-                    data=radar_png,
-                    file_name=f"Radar_R{rnd}_{hcode}_vs_{acode}.png",
-                    mime="image/png",
-                    key=f"radar_dl_{card_index}_{rnd}_{hcode}_{acode}",
-                )
+        swing_radar_png = radar_png
     elif use_form and not use_radar:
         render_comparison_form(home_disp, away_disp, h_season, a_season,
                                h_recent, a_recent)
@@ -2508,51 +2505,65 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         st.divider()
 
     png_key = f"png_{card_index}_{rnd}_{hcode}_{acode}"
-    if png_key not in st.session_state:
-        if st.button("📥 Generate downloadable image",
-                     key=f"btn_{card_index}_{rnd}_{hcode}_{acode}"):
-            with st.spinner("Generating image..."):
-                if played:
-                    h_right_data = team_single_game_stats(all_games, home, int(rnd))
-                    a_right_data = team_single_game_stats(all_games, away, int(rnd))
-                    right_lbl = "This Game"
-                else:
-                    h_right_data = h_recent
-                    a_right_data = a_recent
-                    right_lbl = f"Last {ROLLING_WINDOW}"
+    # Upcoming regular season game: the image button and the radar button side by side
+    if swing_radar_png is not None:
+        _dl_img, _dl_radar, _ = st.columns([1, 1, 2])
+        with _dl_radar:
+            st.download_button(
+                label="📥 Download radar image",
+                data=swing_radar_png,
+                file_name=f"Radar_R{rnd}_{hcode}_vs_{acode}.png",
+                mime="image/png",
+                key=f"radar_dl_{card_index}_{rnd}_{hcode}_{acode}",
+            )
+    else:
+        _dl_img = st.container()
+    with _dl_img:
+        if png_key not in st.session_state:
+            if st.button("📥 Generate downloadable image",
+                         key=f"btn_{card_index}_{rnd}_{hcode}_{acode}"):
+                with st.spinner("Generating image..."):
+                    if played:
+                        h_right_data = team_single_game_stats(all_games, home, int(rnd))
+                        a_right_data = team_single_game_stats(all_games, away, int(rnd))
+                        right_lbl = "This Game"
+                    else:
+                        h_right_data = h_recent
+                        a_right_data = a_recent
+                        right_lbl = f"Last {ROLLING_WINDOW}"
 
-                st.session_state[png_key] = build_preview_png(
-                    home_code=hcode, home_name=home_disp,
-                    home_rank=int(h_season["rank"]),
-                    home_wl=f"{int(h_season['wins'])}W {int(h_season['losses'])}L",
-                    home_form=h_form,
-                    away_code=acode, away_name=away_disp,
-                    away_rank=int(a_season["rank"]),
-                    away_wl=f"{int(a_season['wins'])}W {int(a_season['losses'])}L",
-                    away_form=a_form,
-                    h_season=h_season, a_season=a_season,
-                    h_right=h_right_data, a_right=a_right_data,
-                    home_prob=pred.get("home_prob", 0.5),
-                    away_prob=pred.get("away_prob", 0.5),
-                    round_label=round_label_long,
-                    show_prediction=not played,
-                    right_label=right_lbl,
-                    round_=phase,
-                    series_score=series,
-                    form_gauges=use_form,
-                    season=int(rnd_season),
-                    db_path=str(DB_PATH),
-                )
-            st.rerun()
+                    st.session_state[png_key] = build_preview_png(
+                        home_code=hcode, home_name=home_disp,
+                        home_rank=int(h_season["rank"]),
+                        home_wl=f"{int(h_season['wins'])}W {int(h_season['losses'])}L",
+                        home_form=h_form,
+                        away_code=acode, away_name=away_disp,
+                        away_rank=int(a_season["rank"]),
+                        away_wl=f"{int(a_season['wins'])}W {int(a_season['losses'])}L",
+                        away_form=a_form,
+                        h_season=h_season, a_season=a_season,
+                        h_right=h_right_data, a_right=a_right_data,
+                        home_prob=pred.get("home_prob", 0.5),
+                        away_prob=pred.get("away_prob", 0.5),
+                        round_label=round_label_long,
+                        show_prediction=not played,
+                        right_label=right_lbl,
+                        round_=phase,
+                        series_score=series,
+                        form_gauges=use_form,
+                        season=int(rnd_season),
+                        db_path=str(DB_PATH),
+                    )
+                st.rerun()
 
-    if png_key in st.session_state:
-        st.download_button(
-            label="📥 Download",
-            data=st.session_state[png_key],
-            file_name=f"R{rnd}_{hcode}_vs_{acode}.png",
-            mime="image/png",
-            key=f"dl_{card_index}_{rnd}_{hcode}_{acode}",
-        )
+        if png_key in st.session_state:
+            st.download_button(
+                label="📥 Download Season stats" if swing_layout else "📥 Download",
+                data=st.session_state[png_key],
+                file_name=f"R{rnd}_{hcode}_vs_{acode}.png",
+                mime="image/png",
+                key=f"dl_{card_index}_{rnd}_{hcode}_{acode}",
+            )
 
 
 # =============================================================================
