@@ -65,6 +65,9 @@ ROLLING_WINDOW = 5
 LAST5_MIN_ROUND = 13
 # Gauges only draw a coloured line when the gap reaches this share of the metric scale
 LAST5_MIN_GAP = 0.30
+# Visual on the right of the post-game tables: "gameflow" (Game Flow chart) or "radar"
+# (radar of the game). Change this one word to go back to the radar.
+POSTGAME_SIDE = "gameflow"
 
 # Interrupteurs des Shot Maps : mettre False pour les desactiver sans retirer le code.
 SHOTMAPS_IN_MATCH = True    # bloc "Shot Map" sous Impact Pulse dans un match
@@ -210,6 +213,13 @@ def _autocrop_logo(img_arr):
 # GAMEFLOW
 # =============================================================================
 @st.cache_data(ttl=DB_TTL)
+def _gamecode_num(raw_gc) -> int:
+    """Game number from the schedule gamecode ("E2025_57" or 57)."""
+    if isinstance(raw_gc, str) and "_" in raw_gc:
+        return int(raw_gc.split("_")[1])
+    return int(raw_gc)
+
+
 def get_gameflow_png(gamecode: int, season: int, round_label: str = "",
                      aspect: str = "square") -> bytes | None:
     try:
@@ -1866,6 +1876,16 @@ def cached_radar_png(home_name: str, away_name: str, h_items: tuple, a_items: tu
     return build_radar_png(home_name, away_name, dict(h_items), dict(a_items), title)
 
 
+def _png_size(png: bytes) -> tuple:
+    """Width and height read from the PNG header, without opening the image."""
+    try:
+        if png[:8] == b"\x89PNG\r\n\x1a\n":
+            return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+    except Exception:
+        pass
+    return 0, 0
+
+
 def _radar_items(stats: dict) -> tuple:
     return tuple((m, stats.get(m)) for m in METRICS)
 
@@ -2064,11 +2084,14 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
         return
 
     b64 = base64.b64encode(radar_png).decode("ascii")
-    # The radar runs from the top of the Season table (under its title, and under the
+    # The image runs from the top of the Season table (under its title, and under the
     # legend of the bars) to the bottom of the last table (above the grey note).
     radar_top = TITLE_H + (LEGEND_H if gauges else 0)
     radar_h = total_h - radar_top - (NOTE_H if (battles or decided) else 0)
-    radar_w = round(radar_h * 6.0 / 6.6)        # the radar image is 6 x 6.6 inches
+    # width from the real proportions of the image (radar 6 x 6.6 in, Game Flow square)
+    img_w, img_h = _png_size(radar_png)
+    ratio = (img_w / img_h) if (img_w and img_h) else 6.0 / 6.6
+    radar_w = round(radar_h * ratio)
     st.markdown(
         "<style>"
         # the radar column takes the height of the tables and, through its aspect
@@ -2443,6 +2466,9 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     # the game on the right, no toggle (all phases)
     post_layout = played
     swing_radar_png = None          # radar download, shown at the bottom next to the image one
+    side_dl_label = "📥 Download radar image"
+    side_dl_name = f"Radar_R{rnd}_{hcode}_vs_{acode}.png"
+    gameflow_on_side = False        # Game Flow already shown next to the tables
 
     toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
     if toggle_key not in st.session_state:
@@ -2496,14 +2522,25 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             h_before = _hb.iloc[0].to_dict() if not _hb.empty else None
             a_before = _ab.iloc[0].to_dict() if not _ab.empty else None
         decided = decided_battles(h_game, a_game, h_before, a_before, all_games)
-        try:
-            radar_png = cached_radar_png(home_disp, away_disp, _radar_items(h_game),
-                                         _radar_items(a_game), "This Game")
-        except Exception:
-            radar_png = None
+        side_png = None
+        # Game Flow on the right (the radar of the game repeated the table next to it)
+        if POSTGAME_SIDE == "gameflow":
+            side_png = get_gameflow_png(_gamecode_num(g["gamecode"]), rnd_season,
+                                        round_label=round_label_long, aspect="square")
+            if side_png is not None:
+                gameflow_on_side = True
+                side_dl_label = "📥 Download game flow"
+                side_dl_name = f"GameFlow_R{rnd}_{hcode}_vs_{acode}.png"
+        # radar of the game: chosen in POSTGAME_SIDE, or no Game Flow for this game
+        if side_png is None:
+            try:
+                side_png = cached_radar_png(home_disp, away_disp, _radar_items(h_game),
+                                            _radar_items(a_game), "This Game")
+            except Exception:
+                side_png = None
         render_matchup_tables(home_disp, away_disp, h_game, a_game, title="This Game",
-                              decided=decided, radar_png=radar_png)
-        swing_radar_png = radar_png
+                              decided=decided, radar_png=side_png)
+        swing_radar_png = side_png
     elif use_form and not use_radar:
         render_comparison_form(home_disp, away_disp, h_season, a_season,
                                h_recent, a_recent)
@@ -2549,17 +2586,16 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     # ── Gameflow ──────────────────────────────────────────────────────────
     if played:
-        raw_gc = g["gamecode"]
-        if isinstance(raw_gc, str) and "_" in raw_gc:
-            gc_num = int(raw_gc.split("_")[1])
-        else:
-            gc_num = int(raw_gc)
+        gc_num = _gamecode_num(g["gamecode"])
 
-        gf_png = get_gameflow_png(gc_num, rnd_season, round_label=round_label_long, aspect="square")
-        if gf_png is not None:
-            st.divider()
-            with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
-                st.image(gf_png, use_container_width=True)
+        # already shown next to the tables: no second copy in the expander
+        if not gameflow_on_side:
+            gf_png = get_gameflow_png(gc_num, rnd_season, round_label=round_label_long,
+                                      aspect="square")
+            if gf_png is not None:
+                st.divider()
+                with st.expander("📊 Game Flow — Runs & Best 5 by NetRtg"):
+                    st.image(gf_png, use_container_width=True)
 
         # ── Impact Pulse ──────────────────────────────────────────────────
         st.divider()
@@ -2631,9 +2667,9 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         _dl_img, _dl_radar, _ = st.columns([1, 1, 2])
         with _dl_radar:
             st.download_button(
-                label="📥 Download radar image",
+                label=side_dl_label,
                 data=swing_radar_png,
-                file_name=f"Radar_R{rnd}_{hcode}_vs_{acode}.png",
+                file_name=side_dl_name,
                 mime="image/png",
                 key=f"radar_dl_{card_index}_{rnd}_{hcode}_{acode}",
             )
