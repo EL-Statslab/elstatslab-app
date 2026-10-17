@@ -279,7 +279,7 @@ def _draw_team(ax, cx, code, name, rank, wl, form, show_record, colour=NAVY):
 
 
 def _draw_table(ax, x0, width, title, h_stats, a_stats, home_label, away_label, y0, row_h,
-                metrics=None, show_labels=True):
+                metrics=None, show_labels=True, value_dy=0):
     """Three columns: home value, metric, away value."""
     metrics = metrics or METRICS
     cell_w = (width - 10) * 0.34
@@ -304,7 +304,8 @@ def _draw_table(ax, x0, width, title, h_stats, a_stats, home_label, away_label, 
         for val, inten, cx0 in ((hv, h_int, xh), (av, a_int, xa)):
             _rbox(ax, cx0, y, cell_w, cell_h, cell_colour(inten), r=10, z=2)
             txt = f"{val:.1f}" if val is not None else "n/a"
-            _text(ax, cx0 + cell_w / 2, y + cell_h / 2 + 1, txt, 36, BARLOW_BOLD, NAVY, ha="center")
+            _text(ax, cx0 + cell_w / 2, y + cell_h / 2 + 1 + value_dy, txt, 36, BARLOW_BOLD, NAVY,
+                  ha="center")
         _text(ax, xm + mid_w / 2, y + cell_h / 2 + 1, m, 28, BARLOW_SEMIBOLD, NAVY, ha="center")
         if i < len(metrics) - 1:
             ax.plot([xm + 14, xm + mid_w - 14], [y + cell_h + 4] * 2, color=RULE, lw=1, zorder=1)
@@ -531,9 +532,9 @@ def _draw_swing(ax, battles, y_top, home_code, away_code):
     xa = xm + mid_w + 6
     cx = xm + mid_w / 2
     _text(ax, 500, y_top, "Where the game can swing", 30, BARLOW_BOLD, NAVY, ha="center")
-    ax.plot([x0, x0 + width], [y_top + 18, y_top + 18], color=NAVY, lw=1.6, zorder=2)
+    ax.plot([x0, x0 + width], [y_top + 22, y_top + 22], color=NAVY, lw=1.6, zorder=2)
     row_h, cell_h = 66, 58
-    y = y_top + 30
+    y = y_top + 34
     for i, b in enumerate(battles):
         home_att = b["attacker"] == "home"
         off = (b["off_val"], b["off_pct"], b["off_lab"], b["off_rank"])
@@ -545,12 +546,12 @@ def _draw_swing(ax, battles, y_top, home_code, away_code):
                 _rbox(ax, cx0, y, cell_w, cell_h, "none", ec=NAVY if side == "home" else ORANGE,
                       r=10, lw=3.2, z=3)
             shown = f"{val:.1f}" if "FT Rate" in lab else f"{val:.1f}%"
-            _text(ax, cx0 + cell_w / 2, y + 28, shown, 28, BARLOW_BOLD, NAVY, ha="center")
+            _text(ax, cx0 + cell_w / 2, y + 22, shown, 28, BARLOW_BOLD, NAVY, ha="center")
             sub = f"{lab} · {_ordinal(rank)}" if rank else lab
-            _text(ax, cx0 + cell_w / 2, y + 49, sub, 15, BARLOW_SEMIBOLD, NAVY, ha="center")
+            _text(ax, cx0 + cell_w / 2, y + 45, sub, 15, BARLOW_SEMIBOLD, NAVY, ha="center")
 
-        _text(ax, cx, y + 20, b["family"], 19, BARLOW_SEMIBOLD, NAVY, ha="center")
-        vy, vsize = y + 46, 21
+        _text(ax, cx, y + 17, b["family"], 19, BARLOW_SEMIBOLD, NAVY, ha="center")
+        vy, vsize = y + 42, 21
         if b["verdict"] == "EDGE":
             home_wins = b["winner"] == "home"
             vtxt = f"EDGE {_abbr(home_code if home_wins else away_code)}"
@@ -559,7 +560,7 @@ def _draw_swing(ax, battles, y_top, home_code, away_code):
             vtxt, vcol = b["verdict"], GREY
         _text(ax, cx, vy, vtxt, vsize, BARLOW_BOLD, vcol, ha="center")
         half = _text_w(vtxt, vsize, BARLOW_BOLD) / 2
-        ty = vy - 7                                   # middle of the capital letters
+        ty = vy                                       # va=center_baseline: vy is mid height
         if b["verdict"] == "EDGE":
             if b["winner"] == "home":
                 _triangle(ax, cx - half - 22, ty, -1, vcol)
@@ -637,11 +638,13 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     use_gauges = bool(form_gauges) and bool(h_right) and bool(a_right) and not battles
     row_h = 56 if show_prediction else 72
     y0 = 536
+    swing_end = None
     if battles:
-        row_h, y0 = 50, 508
+        row_h, y0 = 50, 490
         _draw_table(ax, 120, 760, "Season", h_season, a_season, home_name, away_name, y0, row_h,
-                    metrics=SWING_TABLE_METRICS, show_labels=False)
-        _draw_swing(ax, battles, y0 + len(SWING_TABLE_METRICS) * row_h + 34, home_code, away_code)
+                    metrics=SWING_TABLE_METRICS, show_labels=False, value_dy=-3)
+        swing_end = _draw_swing(ax, battles, y0 + len(SWING_TABLE_METRICS) * row_h + 30,
+                                home_code, away_code)
     elif use_gauges:
         row_h, y0 = 52, 560
         _draw_table_form(ax, 120, 760, "Season", h_season, a_season, h_right, a_right,
@@ -664,19 +667,18 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     if show_prediction and battles:
         # version compacte quand le bloc "Where the game can swing" est affiche
         label = "Win probability"
-        py = 1064
-        _text(ax, 500, py, label, 28, BARLOW_BOLD, NAVY, ha="center")
-        bx, bw, by, bh = 80, 840, py + 20, 24
+        py = min(swing_end + 28, 1020)
+        _text(ax, 500, py, label, 30, BARLOW_BOLD, NAVY, ha="center")
+        bx, bw, by, bh = 80, 840, py + 22, 28
         split = bw * float(home_prob)
         ax.add_patch(Rectangle((bx, by), split, bh, facecolor=NAVY, zorder=2))
         ax.add_patch(Rectangle((bx + split, by), bw - split, bh, facecolor=ORANGE, zorder=2))
         ax.plot([bx + split] * 2, [by - 5, by + bh + 5], color=PAPER, lw=3, zorder=3)
         hp, ap_ = f"{home_prob * 100:.1f}%", f"{away_prob * 100:.1f}%"
-        _text(ax, bx, by + 60, hp, 44, BARLOW_BOLD, NAVY)
-        _text(ax, bx + _text_w(hp, 44, BARLOW_BOLD) + 12, by + 60, home_name, 22, BARLOW_REGULAR, GREY)
-        _text(ax, bx + bw, by + 60, ap_, 44, BARLOW_BOLD, ORANGE, ha="right")
-        _text(ax, bx + bw - _text_w(ap_, 44, BARLOW_BOLD) - 12, by + 60, away_name, 22,
-              BARLOW_REGULAR, GREY, ha="right")
+        _text(ax, bx, by + 66, hp, 52, BARLOW_BOLD, NAVY)
+        _text(ax, bx, by + 104, home_name, 24, BARLOW_REGULAR, GREY)
+        _text(ax, bx + bw, by + 66, ap_, 52, BARLOW_BOLD, ORANGE, ha="right")
+        _text(ax, bx + bw, by + 104, away_name, 24, BARLOW_REGULAR, GREY, ha="right")
     elif show_prediction:
         label = "Win probability" if round_ == "RS" else "Match edge"
         if round_ == "FF":
