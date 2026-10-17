@@ -410,6 +410,7 @@ def load_team_games(season: int) -> pd.DataFrame:
             ts."3PM"     AS threepm,
             ts."2PA"     AS twopa,
             ts."3PA"     AS threepa,
+            ts.FTA       AS fta,
             ts.Turnovers AS tov
         FROM team_stats ts
         JOIN team_stats opp
@@ -445,6 +446,7 @@ def aggregate_stats(df: pd.DataFrame) -> dict:
     twopa   = df["twopa"].sum()
     threepa = df["threepa"].sum()
     tov     = df["tov"].sum()
+    fta     = df["fta"].sum() if "fta" in df.columns else 0
     wins    = int((df["score"] > df["opp_score"]).sum())
     games   = len(df)
 
@@ -464,6 +466,7 @@ def aggregate_stats(df: pd.DataFrame) -> dict:
         "AST%":    safe(ast, fgm),
         "eFG%":    safe(twopm + 1.5 * threepm, twopa + threepa),
         "TOV%":    safe(tov, poss),
+        "FTR":     safe(fta, twopa + threepa) if fta else None,
     }
 
 
@@ -1803,6 +1806,59 @@ from preview_export import (SWING_OUTLINE_MIN, SWING_TABLE_METRICS,  # noqa: E40
                             _ordinal, swing_battles)
 
 
+# Four Factors read after a game: (key, family, label, higher is better)
+DECIDED_FACTORS = [("eFG%", "SHOOTING", "eFG%", True), ("TOV%", "TURNOVERS", "TOV%", False),
+                   ("OREB%", "REBOUNDING", "OREB%", True), ("FTR", "FREE THROWS", "FT Rate", True)]
+DECIDED_EDGE_MIN = 0.5   # gap between the teams, in standard deviations of a team game
+
+
+def _game_factor_spread(all_games: pd.DataFrame) -> dict:
+    """Spread of each factor over every team game of the season: tells how big a gap
+    between two teams, or between a game and a season, really is."""
+    g = all_games
+    fga = (g["twopa"] + g["threepa"]).replace(0, np.nan)
+    vals = {
+        "eFG%": (g["twopm"] + 1.5 * g["threepm"]) / fga * 100,
+        "TOV%": g["tov"] / g["poss"].replace(0, np.nan) * 100,
+        "OREB%": g["oreb"] / (g["oreb"] + g["opp_dreb"]).replace(0, np.nan) * 100,
+    }
+    if "fta" in g.columns:
+        vals["FTR"] = g["fta"] / fga * 100
+    out = {}
+    for k, v in vals.items():
+        sd = float(v.std()) if v.notna().sum() > 2 else float("nan")
+        out[k] = sd if sd == sd and sd > 0 else METRIC_SCALE.get(k, 5.0)
+    return out
+
+
+def decided_battles(h_game: dict, a_game: dict, h_before: dict | None, a_before: dict | None,
+                    all_games: pd.DataFrame) -> list | None:
+    """The 3 Four Factors where the two teams differed the most in this game, each with
+    the gap to the team's own season level before the game."""
+    if not h_game or not a_game:
+        return None
+    spread = _game_factor_spread(all_games)
+    rows = []
+    for key, family, label, higher in DECIDED_FACTORS:
+        hv, av = h_game.get(key), a_game.get(key)
+        if hv is None or av is None:
+            continue
+        sd = spread.get(key, METRIC_SCALE.get(key, 5.0))
+        gap = (hv - av) if higher else (av - hv)          # positive: home did better
+        z = gap / sd
+        row = {"family": family, "label": label, "higher": higher, "sd": sd,
+               "home": hv, "away": av, "z": z,
+               "home_delta": None if not h_before or h_before.get(key) is None else hv - h_before[key],
+               "away_delta": None if not a_before or a_before.get(key) is None else av - a_before[key]}
+        if abs(z) >= DECIDED_EDGE_MIN:
+            row["verdict"], row["winner"] = "EDGE", ("home" if z > 0 else "away")
+        else:
+            row["verdict"], row["winner"] = "EVEN", None
+        rows.append(row)
+    rows.sort(key=lambda r: -abs(r["z"]))
+    return rows[:3] or None
+
+
 @st.cache_data(show_spinner=False, max_entries=48)
 def cached_radar_png(home_name: str, away_name: str, h_items: tuple, a_items: tuple,
                      title: str) -> bytes:
@@ -1817,7 +1873,8 @@ def _radar_items(stats: dict) -> tuple:
 def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
                           battles: list | None = None,
                           h_recent: dict | None = None, a_recent: dict | None = None,
-                          gauges: bool = False, radar_png: bytes | None = None):
+                          gauges: bool = False, radar_png: bytes | None = None,
+                          title: str = "Season", decided: list | None = None):
     """Season table and "Where the game can swing" drawn by the same code, so every
     cell has the same width and height in both blocks. Home team on the left, away
     team on the right. With gauges on (from LAST5_MIN_ROUND), each Season cell also
@@ -1886,7 +1943,7 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
 
     # ---- Season
     rows = ""
-    metrics = SWING_TABLE_METRICS if battles else METRICS
+    metrics = SWING_TABLE_METRICS if (battles or decided) else METRICS
     for m in metrics:
         hv, av = h_stats.get(m), a_stats.get(m)
         h_int, a_int = colour_intensity(hv, av, m)
@@ -1915,7 +1972,7 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
                   "(<span style='color:#2ea043;font-weight:700;'>green</span> better, "
                   "<span style='color:#da3633;font-weight:700;'>red</span> worse)</div>")
     season_h = HEAD_H + len(metrics) * ROW_H + (len(metrics) + 2) * GAP
-    html = (TITLE.format("Season") + legend
+    html = (TITLE.format(title) + legend
             + box(TABLE + f"<thead>{head}</thead><tbody>{rows}</tbody></table>", season_h))
     total_h = TITLE_H + (LEGEND_H if gauges else 0) + season_h
 
@@ -1962,6 +2019,46 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
                  "Each row puts one team's attack against the other's defense. "
                  "Ranks among all teams this season.</div>")
 
+    # ---- What decided the game (played games)
+    if decided:
+        def delta_bg(delta, sd, higher):
+            if delta is None:
+                return "#FBF8F1"
+            good = delta if higher else -delta
+            return bg(max(-1.0, min(1.0, good / (1.5 * sd))))
+
+        rows = ""
+        for r in decided:
+            cells = []
+            for side in ("home", "away"):
+                val, delta = r[side], r[side + "_delta"]
+                shown = f"{val:.1f}" if r["label"] == "FT Rate" else f"{val:.1f}%"
+                sub = (f"{r['label']} · {delta:+.1f} vs season" if delta is not None
+                       else r["label"])
+                inner = f"<div style='{VAL}'>{shown}</div><div style='{SUB}'>{sub}</div>"
+                outline = None
+                if r["verdict"] == "EDGE" and r["winner"] == side:
+                    outline = navy if side == "home" else orange
+                cells.append(td(inner, delta_bg(delta, r["sd"], r["higher"]), outline))
+            if r["verdict"] == "EDGE":
+                col = navy if r["winner"] == "home" else orange
+                verdict = "&#9664;&nbsp;EDGE" if r["winner"] == "home" else "EDGE&nbsp;&#9654;"
+            else:
+                col, verdict = grey, "EVEN"
+            mid = (f"<td style='{MID}'>"
+                   f"<div style='font-size:0.72rem;font-weight:600;letter-spacing:0.4px;'>"
+                   f"{r['family']}</div>"
+                   f"<div style='font-size:1rem;font-weight:700;color:{col};white-space:nowrap;'>"
+                   f"{verdict}</div></td>")
+            rows += f"<tr>{cells[0]}{mid}{cells[1]}</tr>"
+        decided_h = len(decided) * ROW_H + (len(decided) + 1) * GAP
+        total_h += TITLE_H + decided_h + NOTE_H
+        html += (TITLE.format("What decided the game")
+                 + box(TABLE + f"<tbody>{rows}</tbody></table>", decided_h)
+                 + f"<div style='height:20px;overflow:hidden;font-size:0.75rem;line-height:20px;"
+                 f"color:{grey};'>Biggest gaps between the two teams in this game. Colour: above "
+                 "(green) or below (red) the team's own season level before the game.</div>")
+
     if radar_png is None:
         st.markdown(f"<div style='width:100%;'>{html}</div>", unsafe_allow_html=True)
         return
@@ -1970,7 +2067,7 @@ def render_matchup_tables(home: str, away: str, h_stats: dict, a_stats: dict,
     # The radar runs from the top of the Season table (under its title, and under the
     # legend of the bars) to the bottom of the last table (above the grey note).
     radar_top = TITLE_H + (LEGEND_H if gauges else 0)
-    radar_h = total_h - radar_top - (NOTE_H if battles else 0)
+    radar_h = total_h - radar_top - (NOTE_H if (battles or decided) else 0)
     radar_w = round(radar_h * 6.0 / 6.6)        # the radar image is 6 x 6.6 inches
     st.markdown(
         "<style>"
@@ -2342,6 +2439,9 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
     # left, radar on the right, no toggle. Played games and the postseason keep the
     # toggle between tables and radar, as before.
     swing_layout = (not played) and phase == "RS"
+    # Played game: This Game table and "What decided the game" on the left, radar of
+    # the game on the right, no toggle (all phases)
+    post_layout = played
     swing_radar_png = None          # radar download, shown at the bottom next to the image one
 
     toggle_key = f"radar_{card_index}_{rnd}_{hcode}_{acode}"
@@ -2350,12 +2450,12 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
     tcol1, tcol2, tcol3 = st.columns([2, 1, 2])
     use_radar = False
-    if not swing_layout:
+    if not (swing_layout or post_layout):
         with tcol2:
             use_radar = st.toggle("🕸️ Radar", key=toggle_key,
                                   value=st.session_state[toggle_key])
     # without the radar toggle, the Share button sits in the centre, under VS
-    with (tcol2 if swing_layout else tcol3):
+    with (tcol2 if (swing_layout or post_layout) else tcol3):
         share_url = f"{SHARE_BASE_URL}/?" + urlencode(
             {"s": int(rnd_season), "r": int(rnd), "m": f"{hcode}_{acode}"}
         )
@@ -2383,6 +2483,26 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         render_matchup_tables(home_disp, away_disp, h_season, a_season, battles,
                               h_recent=h_recent, a_recent=a_recent, gauges=use_form,
                               radar_png=radar_png)
+        swing_radar_png = radar_png
+    elif post_layout:
+        h_game = team_single_game_stats(all_games, home, int(rnd))
+        a_game = team_single_game_stats(all_games, away, int(rnd))
+        # season level of each team before this game, for the "vs season" gaps
+        before = team_season_stats(all_games, int(rnd) - 1)
+        h_before = a_before = None
+        if not before.empty:
+            _hb = before[before["team"].str.upper() == home.upper()]
+            _ab = before[before["team"].str.upper() == away.upper()]
+            h_before = _hb.iloc[0].to_dict() if not _hb.empty else None
+            a_before = _ab.iloc[0].to_dict() if not _ab.empty else None
+        decided = decided_battles(h_game, a_game, h_before, a_before, all_games)
+        try:
+            radar_png = cached_radar_png(home_disp, away_disp, _radar_items(h_game),
+                                         _radar_items(a_game), "This Game")
+        except Exception:
+            radar_png = None
+        render_matchup_tables(home_disp, away_disp, h_game, a_game, title="This Game",
+                              decided=decided, radar_png=radar_png)
         swing_radar_png = radar_png
     elif use_form and not use_radar:
         render_comparison_form(home_disp, away_disp, h_season, a_season,
@@ -2559,7 +2679,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
 
         if png_key in st.session_state:
             st.download_button(
-                label="📥 Download Season stats" if swing_layout else "📥 Download",
+                label=("📥 Download Season stats" if swing_layout
+                       else "📥 Download game stats" if post_layout else "📥 Download"),
                 data=st.session_state[png_key],
                 file_name=f"R{rnd}_{hcode}_vs_{acode}.png",
                 mime="image/png",
