@@ -2354,7 +2354,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         with tcol2:
             use_radar = st.toggle("🕸️ Radar", key=toggle_key,
                                   value=st.session_state[toggle_key])
-    with tcol3:
+    # without the radar toggle, the Share button sits in the centre, under VS
+    with (tcol2 if swing_layout else tcol3):
         share_url = f"{SHARE_BASE_URL}/?" + urlencode(
             {"s": int(rnd_season), "r": int(rnd), "m": f"{hcode}_{acode}"}
         )
