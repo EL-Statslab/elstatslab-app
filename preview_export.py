@@ -568,6 +568,59 @@ def _draw_swing(ax, battles, y_top, home_code, away_code):
     return y
 
 
+def _draw_decided(ax, decided, y_top):
+    """"What decided the game": one row per Four Factors battle of the game. Cell colour
+    = the team's level in this game against its own season level before the game
+    (green above, red below). The EDGE triangle points to the team that won the battle."""
+    x0, width = 120, 760
+    cell_w = (width - 10) * 0.34
+    mid_w = width - 2 * cell_w - 12
+    xh = x0
+    xm = x0 + cell_w + 6
+    xa = xm + mid_w + 6
+    cx = xm + mid_w / 2
+    _text(ax, 500, y_top, "What decided the game", 30, BARLOW_BOLD, NAVY, ha="center")
+    ax.plot([x0, x0 + width], [y_top + 22, y_top + 22], color=NAVY, lw=1.6, zorder=2)
+    row_h, cell_h = 66, 58
+    y = y_top + 34
+    for i, r in enumerate(decided):
+        for side, cx0 in (("home", xh), ("away", xa)):
+            val, delta = r[side], r[side + "_delta"]
+            if delta is None:
+                fill = CARD
+            else:
+                good = delta if r["higher"] else -delta
+                fill = cell_colour(max(-1.0, min(1.0, good / (1.5 * r["sd"]))))
+            _rbox(ax, cx0, y, cell_w, cell_h, fill, r=10, z=2)
+            if r["verdict"] == "EDGE" and r["winner"] == side:
+                _rbox(ax, cx0, y, cell_w, cell_h, "none", ec=NAVY if side == "home" else ORANGE,
+                      r=10, lw=3.2, z=3)
+            shown = f"{val:.1f}" if r["label"] == "FT Rate" else f"{val:.1f}%"
+            _text(ax, cx0 + cell_w / 2, y + 22, shown, 28, BARLOW_BOLD, NAVY, ha="center")
+            sub = (f"{r['label']} · {delta:+.1f} vs season" if delta is not None else r["label"])
+            _text(ax, cx0 + cell_w / 2, y + 45, sub, 15, BARLOW_SEMIBOLD, NAVY, ha="center")
+        _text(ax, cx, y + 17, r["family"], 19, BARLOW_SEMIBOLD, NAVY, ha="center")
+        vy, vsize = y + 42, 21
+        if r["verdict"] == "EDGE":
+            vtxt, vcol = "EDGE", (NAVY if r["winner"] == "home" else ORANGE)
+        else:
+            vtxt, vcol = "EVEN", GREY
+        _text(ax, cx, vy, vtxt, vsize, BARLOW_BOLD, vcol, ha="center")
+        half = _text_w(vtxt, vsize, BARLOW_BOLD) / 2
+        if r["verdict"] == "EDGE":
+            if r["winner"] == "home":
+                _triangle(ax, cx - half - 22, vy, -1, vcol)
+            else:
+                _triangle(ax, cx + half + 22, vy, +1, vcol)
+        if i < len(decided) - 1:
+            ax.plot([xm + 14, xm + mid_w - 14], [y + row_h - 3] * 2, color=RULE, lw=1, zorder=1)
+        y += row_h
+    _text(ax, 500, y + 14, "Biggest gaps between the two teams in this game. Colour: above (green) "
+          "or below (red) each team's own season level before the game.",
+          16, BARLOW_REGULAR, GREY, ha="center")
+    return y
+
+
 # =============================================================================
 # MAIN EXPORT
 # =============================================================================
@@ -586,7 +639,9 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
                       form_gauges: bool = False,
                       swing: Optional[bool] = None,
                       season: Optional[int] = None,
-                      db_path=None) -> bytes:
+                      db_path=None,
+                      decided: Optional[list] = None,
+                      final_score: Optional[tuple] = None) -> bytes:
     fig = plt.figure(figsize=(FIG_W_IN, FIG_H_IN), dpi=DPI, facecolor=PAPER)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
@@ -598,7 +653,8 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     if brand.exists():
         logo = _load_brand_logo(brand)
         _image(ax, logo, *_fit(logo, 96, 96, 98, 84), z=6)
-    _text(ax, 170, 52, "MATCHUP", 22, BARLOW_BOLD, ORANGE)
+    post_game = (not show_prediction) and bool(decided)
+    _text(ax, 170, 52, "POST GAME" if post_game else "MATCHUP", 22, BARLOW_BOLD, ORANGE)
     title = _title_for(round_label)
     _text(ax, 170, 106, title, min(54, 1700 / max(len(title), 1)), BARLOW_BOLD, NAVY)
     _text(ax, W - 50, 52, "EUROLEAGUE", 20, BARLOW_BOLD, GREY, ha="right")
@@ -620,6 +676,11 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
         _text(ax, 430, 284, str(hw), 84, BARLOW_BOLD, hcol, ha="center")
         _text(ax, 500, 284, "-", 60, BARLOW_REGULAR, "#B5AB98", ha="center")
         _text(ax, 570, 284, str(aw), 84, BARLOW_BOLD, acol, ha="center")
+    elif post_game and final_score:
+        hs, as_ = final_score
+        _text(ax, 430, 262, str(int(hs)), 92, BARLOW_BOLD, NAVY, ha="center")
+        _text(ax, 500, 262, "-", 60, BARLOW_REGULAR, "#B5AB98", ha="center")
+        _text(ax, 570, 262, str(int(as_)), 92, BARLOW_BOLD, ORANGE, ha="center")
     else:
         _text(ax, 500, 254, "VS", 84, BARLOW_BOLD, NAVY, ha="center")
 
@@ -628,11 +689,16 @@ def build_preview_png(home_code: str, home_name: str, home_rank: int,
     battles = None
     if want_swing and show_prediction and round_ == "RS":
         battles = swing_battles(home_code, away_code, season=season, db_path=db_path)
-    use_gauges = bool(form_gauges) and bool(h_right) and bool(a_right) and not battles
+    use_gauges = bool(form_gauges) and bool(h_right) and bool(a_right) and not battles and not post_game
     row_h = 56 if show_prediction else 72
     y0 = 536
     swing_end = None
-    if battles:
+    if post_game:
+        row_h, y0 = 50, 490
+        _draw_table(ax, 120, 760, "This Game", h_right, a_right, home_name, away_name, y0, row_h,
+                    metrics=SWING_TABLE_METRICS, show_labels=False, value_dy=-3)
+        _draw_decided(ax, decided, y0 + len(SWING_TABLE_METRICS) * row_h + 30)
+    elif battles:
         row_h, y0 = 50, 490
         _draw_table(ax, 120, 760, "Season", h_season, a_season, home_name, away_name, y0, row_h,
                     metrics=SWING_TABLE_METRICS, show_labels=False, value_dy=-3)
