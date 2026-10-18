@@ -3889,37 +3889,46 @@ def _perf(name):
 
 
 def render_return_invite() -> None:
-    """Small card at the bottom of every tab inviting visitors to come back."""
+    """Three small blocks at the bottom of every tab: come back (X), support (Ko-fi), collaborations."""
+    card = (
+        "flex:1 1 220px;min-width:0;display:flex;flex-direction:column;"
+        "background:#FBF8F1;border:1px solid #E1D8C6;border-top:5px solid #E4572E;"
+        "border-radius:14px;padding:16px 18px;color:#14213D;"
+    )
+    title = "font-weight:700;font-size:1.1rem;"
+    text = "margin-top:6px;font-size:.95rem;line-height:1.4;"
+    btn = (
+        "align-self:flex-start;margin-top:auto;padding:8px 14px;border-radius:10px;"
+        "background:#E4572E;color:#ffffff;font-weight:700;font-size:.95rem;"
+        "text-decoration:none;"
+    )
+    gap = "height:12px;"
+    blocks = [
+        ("Come back every round",
+         "New analyses after every EuroLeague round. Always free, always ad free.",
+         "https://x.com/EL_Statslab", "Follow @EL_Statslab on X"),
+        ("Support the project",
+         "If you enjoy ELSTATSLAB, you can help keep it running.",
+         "https://ko-fi.com/elstatslab", "Buy me a coffee on Ko-fi"),
+        ("Collaborations",
+         "Want to work together? Get in touch.",
+         "mailto:elstatslab@gmail.com", "elstatslab@gmail.com"),
+    ]
+    cards = "".join(
+        f"<div style='{card}'>"
+        f"<div style='{title}'>{t}</div>"
+        f"<div style='{text}'>{d}</div>"
+        f"<div style='{gap}'></div>"
+        f"<a href='{h}' target='_blank' style='{btn}'>{label}</a>"
+        f"</div>"
+        for t, d, h, label in blocks
+    )
     st.markdown(
-        "<div style='max-width:820px;margin:28px auto 8px auto;padding:18px 22px;"
-        "background:#FBF8F1;border:1px solid #E1D8C6;border-left:5px solid #E4572E;"
-        "border-radius:14px;'>"
-        "<div style='font-weight:700;font-size:1.15rem;color:#14213D;'>"
-        "Come back every round</div>"
-        "<div style='margin-top:6px;font-size:1rem;color:#14213D;line-height:1.45;'>"
-        "New analyses are added after every EuroLeague round. Bookmark this page "
-        "(Ctrl+D on a computer, or the share menu on your phone) so you can find it again. "
-        "The site is always free and always ad free."
-        "</div>"
-        "<div style='margin-top:10px;font-size:.95rem;color:#14213D;'>"
-        "<a href='https://x.com/EL_Statslab' target='_blank' "
-        "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
-        "Follow @EL_Statslab on X</a> for the visuals behind the numbers, or "
-        "<a href='https://elstatslab.substack.com/p/elstatslab-is-an-independent-analytics' "
-        "target='_blank' "
-        "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
-        "read the story behind the project on Substack</a>."
-        "</div>"
-        "<div style='margin-top:14px;padding-top:12px;border-top:1px solid #E1D8C6;"
-        "font-size:.95rem;color:#14213D;line-height:1.45;'>"
-        "ELSTATSLAB is built and run by one person in his spare time. "
-        "If you enjoy it, you can "
-        "<a href='https://ko-fi.com/elstatslab' target='_blank' "
-        "style='color:#E4572E;font-weight:700;text-decoration:none;'>"
-        "buy me a coffee on Ko-fi</a>. Thank you for the support!"
-        "</div></div>",
+        "<div style='max-width:820px;margin:28px auto 8px auto;display:flex;"
+        f"flex-wrap:wrap;gap:14px;'>{cards}</div>",
         unsafe_allow_html=True,
     )
+
 
 def main():
     _t_main = _time.perf_counter()
