@@ -66,6 +66,10 @@ ROW_H_MAX = 46
 X_LABEL, X_VALUE = 66, 300
 TRACK_X0, TRACK_X1 = 440, 925
 
+# Team name in the hero banner: biggest size, smallest size, gap kept before the pill
+NAME_SIZE_MAX, NAME_SIZE_MIN = 62, 36
+NAME_PILL_GAP = 24
+
 
 def _resolve(p) -> Path:
     """Finds a file relative to the working folder, then relative to this module."""
@@ -179,6 +183,20 @@ def _text(ax, x, y, s, size, fp, color, ha="left", va="center_baseline", z=6, **
     return ax.text(x, y, s, fontproperties=f, color=color, ha=ha, va=va, zorder=z, **kw)
 
 
+def _fit_size(fig, ax, s, size, fp, max_w, min_size=NAME_SIZE_MIN):
+    """Largest size (at most `size`) at which text `s` is no wider than max_w design units.
+    The text is measured once, then removed, so nothing extra is drawn."""
+    f = fp.copy()
+    f.set_size(size * PT)
+    t = ax.text(0, 0, s, fontproperties=f)
+    bbox = t.get_window_extent(fig.canvas.get_renderer())
+    t.remove()
+    width = bbox.width * W / (FIG_W_IN * DPI)           # pixels to design units
+    if width <= max_w or width <= 0:
+        return size
+    return max(min_size, size * max_w / width)
+
+
 def _rbox(ax, x, y, w, h, fc, ec="none", r=14, lw=1.2, z=1):
     ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle=f"round,pad=0,rounding_size={r}",
                                 facecolor=fc, edgecolor=ec, linewidth=lw, zorder=z))
@@ -260,11 +278,19 @@ def build_team_card_png(
         crest = _load_team_logo_on_white(_resolve(team_logo_path))
         _image(ax, crest, *_fit(crest, 74, 74, 124, HERO_Y + 65), z=3)
         name_x = 200
-    _text(ax, name_x, HERO_Y + 46, team_name, 62, BARLOW_BOLD, PAPER)
-    _text(ax, name_x, HERO_Y + 105, scope_label, 24, BARLOW_REGULAR, NAVY_SOFT)
+
+    # The pill sits on the right: the name must stop before it.
+    pill_w = None
     if games_played is not None:
         gp = f"{games_played} GAME{'S' if games_played != 1 else ''} PLAYED"
         pill_w = 40 + len(gp) * 11.5
+        name_right = 922 - pill_w - NAME_PILL_GAP
+    else:
+        name_right = 922
+    name_size = _fit_size(fig, ax, team_name, NAME_SIZE_MAX, BARLOW_BOLD, name_right - name_x)
+    _text(ax, name_x, HERO_Y + 46, team_name, name_size, BARLOW_BOLD, PAPER)
+    _text(ax, name_x, HERO_Y + 105, scope_label, 24, BARLOW_REGULAR, NAVY_SOFT)
+    if pill_w is not None:
         _rbox(ax, 922 - pill_w, HERO_Y + 45, pill_w, 40, ORANGE, r=20, z=2)
         _text(ax, 922 - pill_w / 2, HERO_Y + 65, gp, 21, BARLOW_BOLD, "white", ha="center", z=3)
 
