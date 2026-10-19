@@ -22,6 +22,11 @@ from matplotlib.colors import LinearSegmentedColormap
 
 from lineup_export import build_lineup_png, build_match_lineups_png
 
+try:
+    import rotation_chart          # rotation chart of a match (optional, the tab works without it)
+except Exception:
+    rotation_chart = None
+
 # Thresholds, adjust here
 MIN_MINUTES_DEFAULT = 5.0   # season and rounds scopes (slider default, five man units)
 MIN_MINUTES_MATCH = 3.0     # single match, same as the Game Flow Best 5
@@ -337,6 +342,41 @@ def _render_matrix(df: pd.DataFrame, f: pd.DataFrame):
     )
 
 
+@st.cache_data(show_spinner=False, max_entries=12)
+def _cached_rotation_png(_conn, season: int, game_code: int, round_label: str) -> bytes:
+    data = rotation_chart.load_rotation_data(_conn, season, game_code, round_label)
+    if data is None:
+        return b""
+    return rotation_chart.render_rotation_png(data)
+
+
+def _render_rotations(conn, season: int, game_code: int, round_label: str):
+    """Rotation chart of one match (both teams). Drawn only when the toggle is on."""
+    if rotation_chart is None:
+        return
+    st.markdown("#### Rotations")
+    if not rotation_chart.rotation_available(conn, season, game_code):
+        st.caption("Rotations are not available for this match yet.")
+        return
+    st.caption("Who was on court and when. Each bar is one stint, colour and number show the "
+               "team plus/minus while the player was on court.")
+    if not st.toggle("Show the rotation chart", key=f"lu_rot_{season}_{game_code}"):
+        return
+    try:
+        with st.spinner("Drawing rotations..."):
+            png = _cached_rotation_png(conn, int(season), int(game_code), round_label)
+    except Exception as e:
+        st.error(f"Rotation chart error: {e}")
+        return
+    if not png:
+        st.caption("Rotations are not available for this match yet.")
+        return
+    st.image(png, use_container_width=True)
+    st.download_button("Download PNG", data=png,
+                       file_name=f"rotations_{season}_{game_code}.png",
+                       mime="image/png", key=f"lu_rot_dl_{season}_{game_code}")
+
+
 def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     st.markdown(_CSS, unsafe_allow_html=True)
 
@@ -395,12 +435,27 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     n_games = int(df["gamecode"].nunique())
     st.caption(f"{name_fn(team)}: {n_games} game{'s' if n_games != 1 else ''} in this selection. "
                "GP in the table is the number of games the unit played together.")
+    def _rot():
+        """Rotations block, only for a single match. Called before every exit of the tab."""
+        if scope != "Match" or match_gc is None:
+            return
+        gd = None
+        try:
+            sched = _load_schedule(conn, season)
+            row = sched[sched["game_number"] == int(match_gc)]
+            if len(row):
+                gd = int(row.iloc[0]["gameday"])
+        except Exception:
+            pass
+        _render_rotations(conn, int(season), int(match_gc), f"Round {gd}" if gd else "")
+
     # Season and Rounds always use the shared possession count. A single match already
     # published keeps its old NetRtg, like in the Match Center.
     shared = not (scope == "Match" and _legacy_net(season, match_gc))
     agg = _aggregate(df, shared) if k == 5 else _finish(_combo_table(df, k), shared)
     if agg.empty:
         st.info("No lineup with enough data for this selection.")
+        _rot()
         return
 
     base_min = MIN_MINUTES_MATCH if scope == "Match" else MIN_MINUTES_DEFAULT
@@ -417,6 +472,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     if f.empty:
         st.info(f"No {lab['plural'][:-1] if lab['plural'].endswith('s') else lab['plural']} "
                 "meets the minimum yet. Lower the minimum minutes, or come back as the season goes.")
+        _rot()
         return
 
     best = _row(f.iloc[0])
@@ -521,6 +577,8 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     if k == 2:
         st.markdown("#### Duo matrix")
         _render_matrix(df, f)
+
+    _rot()
 
 
 # ---------------------------------------------------------------------------
