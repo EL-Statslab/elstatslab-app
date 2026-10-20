@@ -24,8 +24,10 @@ from lineup_export import build_lineup_png, build_match_lineups_png
 
 try:
     import rotation_chart          # rotation chart of a match (optional, the tab works without it)
-except Exception:
+    _ROT_ERR = ""
+except Exception as _e:
     rotation_chart = None
+    _ROT_ERR = f"{type(_e).__name__}: {_e}"
 
 # Thresholds, adjust here
 MIN_MINUTES_DEFAULT = 5.0   # season and rounds scopes (slider default, five man units)
@@ -342,7 +344,7 @@ def _render_matrix(df: pd.DataFrame, f: pd.DataFrame):
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=4)
 def _cached_rotation_png(_conn, season: int, game_code: int, round_label: str) -> bytes:
     data = rotation_chart.load_rotation_data(_conn, season, game_code, round_label)
     if data is None:
@@ -350,17 +352,19 @@ def _cached_rotation_png(_conn, season: int, game_code: int, round_label: str) -
     return rotation_chart.render_rotation_png(data)
 
 
-def _render_rotations(conn, season: int, game_code: int, round_label: str):
+def _render_rotations(conn, season: int, game_code: int, round_label: str, tag: str = "",
+                      always: bool = False):
     """Rotation chart of one match (both teams). Drawn only when the toggle is on."""
-    if rotation_chart is None:
-        return
     st.markdown("#### Rotations")
+    if rotation_chart is None:
+        st.caption(f"Rotation chart unavailable (import error): {_ROT_ERR}")
+        return
     if not rotation_chart.rotation_available(conn, season, game_code):
         st.caption("Rotations are not available for this match yet.")
         return
     st.caption("Who was on court and when. Each bar is one stint, colour and number show the "
                "team plus/minus while the player was on court.")
-    if not st.toggle("Show the rotation chart", key=f"lu_rot_{season}_{game_code}"):
+    if not always and not st.toggle("Show the rotation chart", key=f"lu_rot{tag}_{season}_{game_code}"):
         return
     try:
         with st.spinner("Drawing rotations..."):
@@ -374,7 +378,7 @@ def _render_rotations(conn, season: int, game_code: int, round_label: str):
     st.image(png, use_container_width=True)
     st.download_button("Download PNG", data=png,
                        file_name=f"rotations_{season}_{game_code}.png",
-                       mime="image/png", key=f"lu_rot_dl_{season}_{game_code}")
+                       mime="image/png", key=f"lu_rot_dl{tag}_{season}_{game_code}")
 
 
 def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
@@ -729,3 +733,10 @@ def render_match_lineups(conn, season, game_code, home_code, away_code,
                                data=st.session_state[png_key],
                                file_name=f"Lineups_{home_code}_vs_{away_code}.png",
                                mime="image/png", key=f"lu_dl_{card_index}_{game_code}")
+
+
+def render_match_rotations(conn, season, game_code, round_label, card_index):
+    """Match Center block: rotation chart of both teams (drawn as soon as the block is opened)."""
+    with st.expander("\U0001F501 Rotations \u2014 Who played with whom"):
+        _render_rotations(conn, int(season), int(game_code), round_label or "",
+                          tag=f"_mc{card_index}", always=True)
