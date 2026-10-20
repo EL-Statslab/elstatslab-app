@@ -77,6 +77,7 @@ POSTGAME_SIDE = "gameflow"
 # Interrupteurs des Shot Maps : mettre False pour les desactiver sans retirer le code.
 SHOTMAPS_IN_MATCH = True    # bloc "Shot Map" sous Impact Pulse dans un match
 LINEUPS_IN_MATCH = True     # bloc "Lineups" sous Impact Pulse dans un match
+ROTATIONS_IN_MATCH = True   # bloc "Rotations" sous Impact Pulse dans un match
 SHOTMAPS_TAB = True         # onglet "Shot Maps"
 
 # Brand typeface for exported PNGs (Barlow Condensed, matches the X banner).
@@ -2650,6 +2651,12 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
                     card_index=card_index, elstatslab_logo=ELSTATSLAB_LOGO,
                     team_logo_fn=logo_path, logo_zoom_fn=logo_zoom)
 
+        def _rotations():
+            if ROTATIONS_IN_MATCH and hasattr(lineup_tab, "render_match_rotations"):
+                lineup_tab.render_match_rotations(
+                    conn=get_conn(), season=rnd_season, game_code=gc_num,
+                    round_label=round_label_long, card_index=card_index)
+
         def _shotmap():
             if SHOTMAPS_IN_MATCH and hasattr(shotmap_ui, "render_match_shotmaps"):
                 shotmap_ui.render_match_shotmaps(
@@ -2664,6 +2671,8 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
             sections = {"⚡ Impact Pulse": _impact}
             if LINEUPS_IN_MATCH:
                 sections["🧩 Lineups"] = _lineups
+            if ROTATIONS_IN_MATCH:
+                sections["🔁 Rotations"] = _rotations
             if SHOTMAPS_IN_MATCH:
                 sections["🎯 Shot Map"] = _shotmap
             st.caption("More on this game")
@@ -2690,6 +2699,7 @@ def render_match_analysis(g: pd.Series, rnd: int, all_games: pd.DataFrame,
         else:
             _impact()
             _lineups()
+            _rotations()
             _shotmap()
         lap("impact/lineups/shot map")
 
