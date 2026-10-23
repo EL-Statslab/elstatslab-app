@@ -17,6 +17,11 @@ Drop in replacement for gameflow_chart.py, same public function:
 The aspect argument is kept for compatibility. Both values now return the 4:5
 export, the format X shows uncropped.
 
+Fix (overtime separator): period separators are now drawn on the LAST point of the
+previous period instead of the first event of the new one. Before, the OT1 line was
+drawn after the first overtime basket, so a game tied at the end of regulation looked
+like one team was leading before overtime.
+
 Self contained on purpose. Run from the ELSTATSLAB_APP folder so that Logos/
 and fonts/ resolve.
 """
@@ -140,6 +145,8 @@ def load_gameflow(gc, s):
 
 
 def _qt_bounds(ps):
+    """Returns (index, period) for the first event of each new period.
+    The drawn separator must use index - 1 (see _sep_index)."""
     if not ps:
         return []
     b = []
@@ -149,6 +156,13 @@ def _qt_bounds(ps):
             b.append((i, p))
             prev = p
     return b
+
+
+def _sep_index(idx_first_new: int) -> int:
+    """A separator sits on the last point of the previous period, so the curve
+    reads the score at the end of that period (a tie at the end of regulation
+    touches zero exactly on the OT line)."""
+    return max(idx_first_new - 1, 0)
 
 
 # =============================================================================
@@ -380,13 +394,15 @@ def _render(data: dict, round_label: str = "") -> bytes:
     ax.plot([PX0, PX1], [y0, y0], color=GREY, lw=1.1, zorder=4)
     ax.plot(xs, ys, color=NAVY, lw=2.6, zorder=5, solid_joinstyle="round")
 
+    # Period separators, drawn on the last point of the previous period
     for idx_b, period in _qt_bounds(ps):
+        sx = X(_sep_index(idx_b))
         if period <= 4:
-            ax.plot([X(idx_b)] * 2, [PY0, PY1], color=RULE, lw=1.4, zorder=2)
-            _text(ax, X(idx_b) + 8, PY1 - 14, f"Q{period}", 18, BARLOW_BOLD, GREY, ha="left")
+            ax.plot([sx] * 2, [PY0, PY1], color=RULE, lw=1.4, zorder=2)
+            _text(ax, sx + 8, PY1 - 14, f"Q{period}", 18, BARLOW_BOLD, GREY, ha="left")
         else:
-            ax.plot([X(idx_b)] * 2, [PY0, PY1], color=GREY, lw=1.0, ls=(0, (4, 4)), zorder=2)
-            _text(ax, X(idx_b) + 8, PY1 - 14, f"OT{period - 4}", 18, BARLOW_BOLD, GREY, ha="left")
+            ax.plot([sx] * 2, [PY0, PY1], color=GREY, lw=1.0, ls=(0, (4, 4)), zorder=2)
+            _text(ax, sx + 8, PY1 - 14, f"OT{period - 4}", 18, BARLOW_BOLD, GREY, ha="left")
     if ps:
         _text(ax, PX0 + 8, PY1 - 14, "Q1", 18, BARLOW_BOLD, GREY, ha="left")
 
