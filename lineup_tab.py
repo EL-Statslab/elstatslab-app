@@ -4,7 +4,7 @@ ELSTATSLAB Lineup tab (v2.3: five man units, trios, duos, duo matrix, NetRtg on 
 v2.3: "Only units with these players" filter above the table (all scopes): the table keeps the units that
 contain every selected player. For five man units, a line gives the selected players together.
 
-v2.2: in the Match scope, a toggle "Show every unit of the match (no minimum)" lists all the
+v2.2: a toggle "Show every unit (no minimum)" (all scopes since v2.4) lists all the
 five man units, trios or duos that played in the selected match, small samples included
 (they get a LOW SAMPLE flag). Best and worst cards and the PNG export keep the usual minimums.
 
@@ -472,11 +472,10 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         _rot()
         return
 
-    # Match scope only: list every unit of the match, small samples included
-    show_all = False
-    if scope == "Match":
-        show_all = st.toggle(f"Show every unit of the match (no minimum)",
-                             key=f"lu_all_{k}_{match_gc}")
+    # All scopes: list every unit of the selection, small samples included
+    _what = "of the match" if scope == "Match" else "of the selection"
+    show_all = st.toggle(f"Show every unit {_what} (no minimum)",
+                         key=f"lu_all_{season}_{team}_{k}_{scope_label}")
 
     base_min = MIN_MINUTES_MATCH if scope == "Match" else MIN_MINUTES_DEFAULT
     default_min = max(base_min, MIN_PER_GAME[k] * n_games)
@@ -503,7 +502,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
 
     if f_q.empty:
         st.info("No unit meets the minimum, so there is no best or worst card. "
-                "Every unit of the match is listed below.")
+                f"Every unit {_what} is listed below.")
     else:
         best = _row(f_q.iloc[0])
         worst = _row(f_q.iloc[-1]) if len(f_q) > 1 else None
@@ -555,7 +554,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
 
     if f.empty:
         st.info("No unit with these players meets the current minimums. "
-                "Lower the minimum minutes" + (" or turn on the toggle above." if scope == "Match" else "."))
+                "Lower the minimum minutes or turn on the toggle above.")
         _rot()
         return
 
@@ -637,7 +636,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     if show_all:
         st.caption(
             "Click a column header to sort. NetRtg is ORTG minus DRTG, per 100 possessions. "
-            f"Every unit of the match is listed. Units under {min_minutes:g} minutes together or "
+            f"Every unit {_what} is listed. Units under {min_minutes:g} minutes together or "
             f"under {min_poss:g} possessions on a side are marked LOW SAMPLE. "
             "Very small samples swing a lot, read them with care."
         )
