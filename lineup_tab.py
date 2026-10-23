@@ -1,7 +1,7 @@
 """
-ELSTATSLAB Lineup tab (v2.3: five man units, trios, duos, duo matrix, NetRtg on a shared possession count).
+ELSTATSLAB Lineup tab (v2.4: five man units, trios, duos, duo matrix, NetRtg on a shared possession count).
 
-v2.3: "Only units with these players" filter above the table (all scopes): the table keeps the units that
+v2.4: "Generate table image" button (needs lineup_table_export.py). v2.3: "Only units with these players" filter above the table (all scopes): the table keeps the units that
 contain every selected player. For five man units, a line gives the selected players together.
 
 v2.2: a toggle "Show every unit (no minimum)" (all scopes since v2.4) lists all the
@@ -17,6 +17,7 @@ floor contains 10 duos and 10 trios, so their minutes and points add up.
 Needs lineup_export.py in the same folder.
 """
 
+import hashlib
 import json
 import math
 from itertools import combinations
@@ -28,6 +29,14 @@ import streamlit as st
 from matplotlib.colors import LinearSegmentedColormap
 
 from lineup_export import build_lineup_png, build_match_lineups_png
+
+try:
+    from lineup_table_export import build_lineup_table_png, max_rows   # table image for X (optional)
+    _TBL_ERR = ""
+except Exception as _e2:
+    build_lineup_table_png = None
+    max_rows = None
+    _TBL_ERR = f"{type(_e2).__name__}: {_e2}"
 
 try:
     import rotation_chart          # rotation chart of a match (optional, the tab works without it)
@@ -391,6 +400,91 @@ def _render_rotations(conn, season: int, game_code: int, round_label: str, tag: 
                        mime="image/png", key=f"lu_rot_dl{tag}_{season}_{game_code}")
 
 
+def _sel_names(sel_players, p_names):
+    names = [_short_name(p_names[i]) for i in sel_players]
+    if len(set(names)) < len(names):
+        names = [_pretty_name(p_names[i]) for i in sel_players]
+    return names
+
+
+def _render_table_export(f, sel_players, p_names, recap, lab, scope, scope_label, show_all,
+                         min_minutes, min_poss, team, season, name_fn, team_logo_fn,
+                         elstatslab_logo):
+    """Image (4:5, for X) of the table shown above. Built on demand so the tab stays light."""
+    if build_lineup_table_png is None:
+        st.caption(f"Table image unavailable (import error): {_TBL_ERR}")
+        return
+    cap = max_rows(recap is not None)
+    fx = f
+    if len(fx) > cap:                       # keep the units with the most minutes together
+        fx = fx.sort_values("minutes", ascending=False).head(cap)
+    fx = fx.sort_values("netrtg", ascending=False)
+    sel_ids = set(sel_players)
+    rows = []
+    for r in fx.itertuples(index=False):
+        ids = str(r.player_ids).split("|")
+        names = str(r.player_names).split("|")
+        short = [_short_name(n) for n in names]
+        if len(set(short)) < len(short):
+            short = [_pretty_name(n) for n in names]
+        rows.append({
+            "players": short,
+            "sel": [i in sel_ids for i in ids],
+            "net": round(float(r.netrtg), 1),
+            "ortg": round(float(r.ortg), 1),
+            "drtg": round(float(r.drtg), 1),
+            "minutes": round(float(r.minutes), 1),
+            "gp": int(r.gp),
+            "low": (not bool(r.qualifies)) if show_all else False,
+        })
+
+    n_sel = len(sel_players)
+    names = _sel_names(sel_players, p_names)
+    if n_sel == 0:
+        label, title = "ALL LINEUPS", f"All {lab['plural']}"
+    elif n_sel == 1:
+        label, title = "LINEUPS WITH", names[0]
+    elif n_sel == 2:
+        label, title = "LINEUPS TOGETHER", f"{names[0]} and {names[1]}"
+    elif n_sel == 3:
+        label, title = "LINEUPS TOGETHER", f"{names[0]}, {names[1]} and {names[2]}"
+    else:
+        label, title = "LINEUPS TOGETHER", f"{n_sel} players together"
+
+    if show_all:
+        note = "Every unit listed, small samples marked LOW SAMPLE"
+    else:
+        note = f"At least {min_minutes:g} min together and {min_poss:g} possessions on each side"
+    foot = "NetRtg is ORTG minus DRTG per 100 possessions. Small samples swing a lot."
+    if len(f) > len(rows):
+        foot = (f"Showing the {len(rows)} units with the most minutes together, out of {len(f)}. "
+                + foot)
+
+    brand = Path(elstatslab_logo) if elstatslab_logo else None
+    logo = team_logo_fn(team)
+    payload = {
+        "label": label, "title": title,
+        "team_name": name_fn(team), "scope": scope_label, "note": note,
+        "brand_logo": str(brand) if brand and brand.exists() else "",
+        "team_logo": str(logo) if logo else "",
+        "recap": recap, "rows": rows, "show_gp": scope != "Match", "foot": foot,
+    }
+    key = hashlib.md5(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    fname = f"lineup_table_{team}_{season}.png"
+    cur = st.session_state.get("lu_tpng")
+    if cur and cur[0] == key:
+        st.download_button("Download table image", data=cur[1], file_name=fname,
+                           mime="image/png", key="lu_tdl")
+    elif st.button("Generate table image", key="lu_tgen"):
+        with st.spinner("Generating image..."):
+            try:
+                st.session_state["lu_tpng"] = (key, build_lineup_table_png(payload))
+            except Exception as e:
+                st.error(f"Export error: {e}")
+                return
+        st.rerun()
+
+
 def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
     st.markdown(_CSS, unsafe_allow_html=True)
 
@@ -559,6 +653,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         return
 
     # Sortable table
+    recap = None
     if sel_players and k == 5:
         # Five man units are disjoint, so their totals add up: the selected players together
         _sec = float(f["sec"].sum())
@@ -568,6 +663,10 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
             _po = _pd = (_po + _pd) / 2.0
         if _po > 0 and _pd > 0:
             _o, _d = 100.0 * _pf / _po, 100.0 * _pa / _pd
+            recap = {"net": _o - _d, "ortg": _o, "drtg": _d, "minutes": _sec / 60.0,
+                     "label": ("TOGETHER, NET RATING" if len(sel_players) > 1
+                               else "ON COURT, NET RATING"),
+                     "sub": f"Across {len(f)} unit{'s' if len(f) != 1 else ''} listed"}
             st.caption(
                 f"{', '.join(_short_name(p_names[i]) for i in sel_players)} together in the "
                 f"{len(f)} unit{'s' if len(f) != 1 else ''} listed: {_sec / 60.0:.1f} min, "
@@ -647,6 +746,11 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
             + f" and {min_poss:g} possessions on each side"
             + ". Small samples swing a lot, read them with care."
         )
+
+    # Image of the table for X
+    _render_table_export(f, sel_players, p_names, recap, lab, scope, scope_label, show_all,
+                         min_minutes, min_poss, team, season, name_fn, team_logo_fn,
+                         elstatslab_logo)
 
     # Duo matrix
     if k == 2:
