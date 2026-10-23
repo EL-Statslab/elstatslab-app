@@ -1,7 +1,7 @@
 """
 ELSTATSLAB Lineup tab (v2.3: five man units, trios, duos, duo matrix, NetRtg on a shared possession count).
 
-v2.3: "Only units with these players" filter (all scopes): the table keeps the units that
+v2.3: "Only units with these players" filter above the table (all scopes): the table keeps the units that
 contain every selected player. For five man units, a line gives the selected players together.
 
 v2.2: in the Match scope, a toggle "Show every unit of the match (no minimum)" lists all the
@@ -495,20 +495,6 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
              .reset_index(drop=True))
     f = f_all if show_all else f_q
 
-    # Player filter: keep only the units that contain every selected player
-    p_names = {}
-    for _ids, _nms in zip(df["player_ids"], df["player_names"]):
-        for _pid, _pn in zip(str(_ids).split("|"), str(_nms).split("|")):
-            p_names[_pid] = _pn
-    p_opts = sorted(p_names.keys(), key=lambda i: _pretty_name(p_names[i]))
-    sel_players = st.multiselect("Only units with these players", p_opts,
-                                 format_func=lambda i: _pretty_name(p_names[i]),
-                                 key=f"lu_pl_{season}_{team}_{scope_label}")
-    if sel_players:
-        _sel = set(sel_players)
-        f = f[f["player_ids"].apply(
-            lambda s: _sel.issubset(str(s).split("|")))].reset_index(drop=True)
-
     if f_q.empty and not show_all:
         st.info(f"No {lab['plural'][:-1] if lab['plural'].endswith('s') else lab['plural']} "
                 "meets the minimum yet. Lower the minimum minutes, or come back as the season goes.")
@@ -552,15 +538,28 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         except Exception as e:
             st.error(f"Export error: {e}")
 
+    # Table heading, then the player filter right above the table
+    st.markdown(f"#### All {lab['plural']}")
+    p_names = {}
+    for _ids, _nms in zip(df["player_ids"], df["player_names"]):
+        for _pid, _pn in zip(str(_ids).split("|"), str(_nms).split("|")):
+            p_names[_pid] = _pn
+    p_opts = sorted(p_names.keys(), key=lambda i: _pretty_name(p_names[i]))
+    sel_players = st.multiselect("Only units with these players", p_opts,
+                                 format_func=lambda i: _pretty_name(p_names[i]),
+                                 key=f"lu_pl_{season}_{team}_{scope_label}")
+    if sel_players:
+        _sel = set(sel_players)
+        f = f[f["player_ids"].apply(
+            lambda s: _sel.issubset(str(s).split("|")))].reset_index(drop=True)
+
     if f.empty:
-        st.markdown(f"#### All {lab['plural']}")
         st.info("No unit with these players meets the current minimums. "
                 "Lower the minimum minutes" + (" or turn on the toggle above." if scope == "Match" else "."))
         _rot()
         return
 
     # Sortable table
-    st.markdown(f"#### All {lab['plural']}")
     if sel_players and k == 5:
         # Five man units are disjoint, so their totals add up: the selected players together
         _sec = float(f["sec"].sum())
