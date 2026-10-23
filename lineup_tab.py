@@ -578,8 +578,8 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
             lambda s: ", ".join(_pretty_name(p) for p in str(s).split("|"))),
         "GP": f["gp"].astype(int),
         "MIN": f["minutes"].round(1),
-        "OFF POSS": f["poff"].round(1),
-        "DEF POSS": f["pdef"].round(1),
+        "OFF POSS": f["poff"].round(0),
+        "DEF POSS": f["pdef"].round(0),
         "ORTG": f["ortg"].round(1),
         "DRTG": f["drtg"].round(1),
         "NETRTG": f["netrtg"].round(1),
@@ -588,7 +588,7 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         tbl["SAMPLE"] = np.where(f["qualifies"], "", "LOW SAMPLE")
     m = max(float(tbl["NETRTG"].abs().max()), 1.0)
     sty = (tbl.style
-           .format({"MIN": "{:.1f}", "OFF POSS": "{:.1f}", "DEF POSS": "{:.1f}",
+           .format({"MIN": "{:.1f}", "OFF POSS": "{:.0f}", "DEF POSS": "{:.0f}",
                     "ORTG": "{:.1f}", "DRTG": "{:.1f}", "NETRTG": "{:+.1f}"})
            .background_gradient(subset=["NETRTG"], cmap=_CMAP, vmin=-m, vmax=m))
     try:
