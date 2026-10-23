@@ -286,36 +286,52 @@ def _fmt(key, v):
 # ----------------------------------------------------------------------------
 _CSS = f"""
 <style>
-.gtp-wrap {{ overflow-x: auto; }}
+.gtp-wrap {{ width: 100%; }}
 .gtp-grid {{ display: grid; grid-template-columns: minmax(130px, 1.6fr) minmax(92px, 1.4fr) repeat({len(ATTRS) - 1}, minmax(62px, 1fr));
-            gap: 4px; min-width: 620px; margin-bottom: 4px; }}
+            gap: 4px; margin-bottom: 4px; }}
 .gtp-h {{ font-size: 0.8rem; letter-spacing: 0.06em; opacity: 0.7; text-align: center; padding-bottom: 2px; }}
 .gtp-name {{ font-weight: 700; display: flex; align-items: center; padding: 0 4px; line-height: 1.1; }}
 .gtp-c {{ color: {C_TEXT}; text-align: center; border-radius: 6px; padding: 8px 2px; font-weight: 600;
-          font-size: 0.95rem; line-height: 1.15; display: flex; align-items: center; justify-content: center; }}
+          font-size: 0.95rem; line-height: 1.15; display: flex; align-items: center; justify-content: center;
+          flex-direction: column; min-width: 0; overflow-wrap: anywhere; }}
+.gtp-l {{ display: none; }}
 .gtp-ok {{ background: {C_OK}; }}
 .gtp-close {{ background: {C_CLOSE}; }}
 .gtp-no {{ background: {C_NO}; }}
 .gtp-na {{ background: #8a8f98; }}
+
+/* Phones: one card per guess, name on top, values wrapped on two rows */
+@media (max-width: 700px) {{
+  .gtp-head {{ display: none; }}
+  .gtp-grid.gtp-row {{ grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 0 0 14px 0;
+                      padding-top: 10px; border-top: 1px solid rgba(128,128,128,0.35); }}
+  .gtp-name {{ grid-column: 1 / -1; font-size: 1.05rem; padding: 0 2px 2px 2px; }}
+  .gtp-c.gtp-team {{ grid-column: span 2; }}
+  .gtp-c {{ padding: 6px 2px; font-size: 0.9rem; min-height: 48px; }}
+  .gtp-l {{ display: block; font-size: 0.62rem; letter-spacing: 0.06em; opacity: 0.8; font-weight: 500; margin-bottom: 2px; }}
+}}
 </style>
 """
 
 
 def _grid_html(guesses, answer):
-    head = '<div class="gtp-grid"><div class="gtp-h"></div>' + "".join(
+    head = '<div class="gtp-grid gtp-head"><div class="gtp-h"></div>' + "".join(
         f'<div class="gtp-h">{html.escape(h)}</div>' for _, h, _ in ATTRS
     ) + "</div>"
     rows = []
     for g in reversed(guesses):
         cmp_ = _compare(g, answer)
         cells = [f'<div class="gtp-name">{html.escape(str(g["label"]))}</div>']
-        for key, _, _ in ATTRS:
+        for key, header, _ in ATTRS:
             status, arrow = cmp_[key]
             txt = html.escape(_fmt(key, g.get(key)))
             if arrow:
                 txt += f" {arrow}"
-            cells.append(f'<div class="gtp-c gtp-{status}">{txt}</div>')
-        rows.append('<div class="gtp-grid">' + "".join(cells) + "</div>")
+            cells.append(
+                f'<div class="gtp-c gtp-{status} gtp-{key}">'
+                f'<span class="gtp-l">{html.escape(header)}</span>{txt}</div>'
+            )
+        rows.append('<div class="gtp-grid gtp-row">' + "".join(cells) + "</div>")
     return _CSS + '<div class="gtp-wrap">' + head + "".join(rows) + "</div>"
 
 
