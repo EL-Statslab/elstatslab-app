@@ -326,7 +326,7 @@ def _share_text(number, guesses, answer, won):
     for g in guesses:
         c = _compare(g, answer)
         lines.append("".join(sym[c[k][0]] for k, _, _ in ATTRS))
-    lines += ["", "Play it on my site #EuroLeague"]
+    lines += ["", "Play it on ELSTATSLAB, by @EL_Statslab #EuroLeague"]
     return "\n".join(lines)
 
 
