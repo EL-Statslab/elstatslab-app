@@ -1,5 +1,9 @@
 """
-ELSTATSLAB Lineup tab (v2.1: five man units, trios, duos, duo matrix, NetRtg on a shared possession count).
+ELSTATSLAB Lineup tab (v2.2: five man units, trios, duos, duo matrix, NetRtg on a shared possession count).
+
+v2.2: in the Match scope, a toggle "Show every unit of the match (no minimum)" lists all the
+five man units, trios or duos that played in the selected match, small samples included
+(they get a LOW SAMPLE flag). Best and worst cards and the PNG export keep the usual minimums.
 
 Reads lineup_stints from euroleague_public.db (built by build_lineups.py,
 copied by build_public_db.py). Shows the best and worst unit of a team by
@@ -284,12 +288,15 @@ def _list_html(fs: pd.DataFrame) -> str:
         net = float(r.netrtg)
         col = POS_TXT if net >= 0 else NEG_TXT
         bg = "#DDF0E1" if net >= 0 else "#F8DCDA"
+        low = ""
+        if "qualifies" in fs.columns and not bool(r.qualifies):
+            low = " &middot; LOW SAMPLE"
         out.append(
             "<div class='lu-li'>"
             f"<div class='lu-rk'>{i}</div>"
             f"<div class='lu-bd'><div class='lu-pl'>{names}</div>"
             f"<div class='lu-ms'>{r.minutes:.1f} MIN &middot; ORTG {r.ortg:.1f} &middot; "
-            f"DRTG {r.drtg:.1f} &middot; {int(r.gp)} GP</div></div>"
+            f"DRTG {r.drtg:.1f} &middot; {int(r.gp)} GP{low}</div></div>"
             f"<div class='lu-nb' style='background:{bg}'>"
             f"<div class='lu-nv' style='color:{col}'>{net:+.1f}</div>"
             "<div class='lu-nl'>NET</div></div>"
@@ -462,6 +469,12 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         _rot()
         return
 
+    # Match scope only: list every unit of the match, small samples included
+    show_all = False
+    if scope == "Match":
+        show_all = st.toggle(f"Show every unit of the match (no minimum)",
+                             key=f"lu_all_{k}_{match_gc}")
+
     base_min = MIN_MINUTES_MATCH if scope == "Match" else MIN_MINUTES_DEFAULT
     default_min = max(base_min, MIN_PER_GAME[k] * n_games)
     max_min = float(max(10.0, math.ceil(float(agg["minutes"].max()))))
@@ -470,47 +483,57 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
                             key=f"lu_min_{scope}_{k}_{n_games}")
     min_poss = _match_poss(season, match_gc) if scope == "Match" else MIN_POSS_EACH
 
-    f = agg[(agg["minutes"] >= min_minutes) & (agg["poff"] >= min_poss) & (agg["pdef"] >= min_poss)]
-    f = f.sort_values("netrtg", ascending=False).reset_index(drop=True)
+    agg = agg.copy()
+    agg["qualifies"] = ((agg["minutes"] >= min_minutes)
+                        & (agg["poff"] >= min_poss) & (agg["pdef"] >= min_poss))
+    f_q = (agg[agg["qualifies"]].sort_values("netrtg", ascending=False)
+           .reset_index(drop=True))
+    f_all = (agg.sort_values(["netrtg", "minutes"], ascending=[False, False])
+             .reset_index(drop=True))
+    f = f_all if show_all else f_q
 
-    if f.empty:
+    if f_q.empty and not show_all:
         st.info(f"No {lab['plural'][:-1] if lab['plural'].endswith('s') else lab['plural']} "
                 "meets the minimum yet. Lower the minimum minutes, or come back as the season goes.")
         _rot()
         return
 
-    best = _row(f.iloc[0])
-    worst = _row(f.iloc[-1]) if len(f) > 1 else None
-
-    col_b, col_w = st.columns(2)
-    col_b.markdown(_card_html(lab["best"], NAVY, best), unsafe_allow_html=True)
-    if worst is not None:
-        col_w.markdown(_card_html(lab["worst"], ORANGE, worst), unsafe_allow_html=True)
+    if f_q.empty:
+        st.info("No unit meets the minimum, so there is no best or worst card. "
+                "Every unit of the match is listed below.")
     else:
-        col_w.info("Only one unit meets the minimum, so there is no separate worst one.")
+        best = _row(f_q.iloc[0])
+        worst = _row(f_q.iloc[-1]) if len(f_q) > 1 else None
 
-    # PNG export
-    try:
-        logo = team_logo_fn(team)
-        brand = Path(elstatslab_logo) if elstatslab_logo else None
-        payload = {
-            "team_name": name_fn(team),
-            "scope": scope_label,
-            "heading": f"BEST AND WORST {lab['title']}",
-            "kick_best": lab["best"],
-            "kick_worst": lab["worst"],
-            "note": f"By NetRtg, min {min_minutes:g} min together",
-            "best": best,
-            "worst": worst,
-            "team_logo": str(logo) if logo else "",
-            "brand_logo": str(brand) if brand and brand.exists() else "",
-        }
-        png = _cached_png(json.dumps(payload, sort_keys=True))
-        st.download_button("Download PNG", data=png,
-                           file_name=f"lineup_{unit_name.replace(' ', '')}_{team}_{season}.png",
-                           mime="image/png", key="lu_dl")
-    except Exception as e:
-        st.error(f"Export error: {e}")
+        col_b, col_w = st.columns(2)
+        col_b.markdown(_card_html(lab["best"], NAVY, best), unsafe_allow_html=True)
+        if worst is not None:
+            col_w.markdown(_card_html(lab["worst"], ORANGE, worst), unsafe_allow_html=True)
+        else:
+            col_w.info("Only one unit meets the minimum, so there is no separate worst one.")
+
+        # PNG export (always based on the units that meet the minimum)
+        try:
+            logo = team_logo_fn(team)
+            brand = Path(elstatslab_logo) if elstatslab_logo else None
+            payload = {
+                "team_name": name_fn(team),
+                "scope": scope_label,
+                "heading": f"BEST AND WORST {lab['title']}",
+                "kick_best": lab["best"],
+                "kick_worst": lab["worst"],
+                "note": f"By NetRtg, min {min_minutes:g} min together",
+                "best": best,
+                "worst": worst,
+                "team_logo": str(logo) if logo else "",
+                "brand_logo": str(brand) if brand and brand.exists() else "",
+            }
+            png = _cached_png(json.dumps(payload, sort_keys=True))
+            st.download_button("Download PNG", data=png,
+                               file_name=f"lineup_{unit_name.replace(' ', '')}_{team}_{season}.png",
+                               mime="image/png", key="lu_dl")
+        except Exception as e:
+            st.error(f"Export error: {e}")
 
     # Sortable table
     st.markdown(f"#### All {lab['plural']}")
@@ -525,6 +548,8 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         "DRTG": f["drtg"].round(1),
         "NETRTG": f["netrtg"].round(1),
     })
+    if show_all:
+        tbl["SAMPLE"] = np.where(f["qualifies"], "", "LOW SAMPLE")
     m = max(float(tbl["NETRTG"].abs().max()), 1.0)
     sty = (tbl.style
            .format({"MIN": "{:.1f}", "OFF POSS": "{:.1f}", "DEF POSS": "{:.1f}",
@@ -544,6 +569,8 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
         "DRTG": st.column_config.NumberColumn("DRTG", width="small"),
         "NETRTG": st.column_config.NumberColumn("NETRTG", width="small"),
     }
+    if show_all:
+        cfg["SAMPLE"] = st.column_config.TextColumn("SAMPLE", width="small")
     try:
         tbl_box = st.container(key="lu_tbl")
         list_box = st.container(key="lu_list")
@@ -567,20 +594,29 @@ def render_lineup_tab(conn, seasons, name_fn, elstatslab_logo, team_logo_fn):
             asc = low_is_best if order == "Best first" else (not low_is_best)
             fs = f.sort_values(col_name, ascending=asc).reset_index(drop=True)
             shown = fs.head(30)
-            st.markdown(_list_html(shown), unsafe_allow_html=True)
+            st.markdown(_list_html(shown if show_all else shown.drop(columns=["qualifies"], errors="ignore")),
+                        unsafe_allow_html=True)
             if len(fs) > len(shown):
                 st.caption(f"Showing {len(shown)} of {len(fs)}. Use the table on a larger screen to see all.")
-    st.caption(
-        "Click a column header to sort. NetRtg is ORTG minus DRTG, per 100 possessions. "
-        f"Shown: at least {min_minutes:g} minutes together"
-        + f" and {min_poss:g} possessions on each side"
-        + ". Small samples swing a lot, read them with care."
-    )
+    if show_all:
+        st.caption(
+            "Click a column header to sort. NetRtg is ORTG minus DRTG, per 100 possessions. "
+            f"Every unit of the match is listed. Units under {min_minutes:g} minutes together or "
+            f"under {min_poss:g} possessions on a side are marked LOW SAMPLE. "
+            "Very small samples swing a lot, read them with care."
+        )
+    else:
+        st.caption(
+            "Click a column header to sort. NetRtg is ORTG minus DRTG, per 100 possessions. "
+            f"Shown: at least {min_minutes:g} minutes together"
+            + f" and {min_poss:g} possessions on each side"
+            + ". Small samples swing a lot, read them with care."
+        )
 
     # Duo matrix
     if k == 2:
         st.markdown("#### Duo matrix")
-        _render_matrix(df, f)
+        _render_matrix(df, f_q)
 
     _rot()
 
