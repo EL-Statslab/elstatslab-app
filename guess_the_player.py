@@ -8,7 +8,7 @@ loads no logos and no images, so it is very light on memory.
 Rules shown to the user:
   * One mystery EuroLeague player per day, the same for everybody.
   * 8 guesses. Each guess reveals how it compares with the mystery player.
-  * Green = match, orange = close, dark = no match, arrows show higher or lower.
+  * Green = match, orange = close, dark blue = no match, arrows show higher or lower.
 """
 
 import hashlib
@@ -20,6 +20,14 @@ from datetime import date, datetime
 import pandas as pd
 import streamlit as st
 
+from guess_logic import (
+    MIN_GAMES_FOR_ANSWER,
+    MIN_MPG_FOR_ANSWER,
+    parse_minutes as _parse_minutes,
+    pick_name as _pick_name,
+    today_paris as _today_paris,
+)
+
 try:
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover
@@ -29,10 +37,8 @@ except Exception:  # pragma: no cover
 # Config (edit freely)
 # ----------------------------------------------------------------------------
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "euroleague_public.db")
-LAUNCH_DATE = date(2026, 10, 24)   # puzzle #1
 MAX_GUESSES = 10
-MIN_GAMES_FOR_ANSWER = 5           # mystery player must have played at least this many games
-MIN_MPG_FOR_ANSWER = 15.0          # and average at least this many minutes
+# MIN_GAMES_FOR_ANSWER and MIN_MPG_FOR_ANSWER now live in guess_logic.py (shared with build_public_db.py)
 
 # Thresholds for the "close" (orange) status
 CLOSE_AGE = 2
@@ -65,42 +71,20 @@ DECIMALS = {"age": 0, "height": 0, "mpg": 1, "pir": 1}
 # ----------------------------------------------------------------------------
 def _today():
     """Today's date in Paris time, so the puzzle changes at local midnight."""
-    try:
-        if ZoneInfo is not None:
-            return datetime.now(ZoneInfo("Europe/Paris")).date()
-    except Exception:
-        pass
-    return datetime.now().date()
+    return _today_paris()
 
 
-def _puzzle_number(d):
-    return max(1, (d - LAUNCH_DATE).days + 1)
+_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _date_label(d):
+    """English short date, independent of the server locale: 'Oct 24'."""
+    return f"{_MONTHS[d.month - 1]} {d.day}"
 
 
 # ----------------------------------------------------------------------------
 # Data
 # ----------------------------------------------------------------------------
-def _parse_minutes(v):
-    """Handles 'MM:SS' strings and plain numbers. Returns minutes as float."""
-    if v is None:
-        return 0.0
-    if isinstance(v, (int, float)):
-        return 0.0 if pd.isna(v) else float(v)
-    s = str(v).strip()
-    if not s or s.upper() in ("DNP", "NAN", "NONE"):
-        return 0.0
-    if ":" in s:
-        try:
-            parts = s.split(":")
-            return int(parts[0]) + int(parts[1]) / 60.0
-        except Exception:
-            return 0.0
-    try:
-        return float(s.replace(",", "."))
-    except Exception:
-        return 0.0
-
-
 def _parse_height_cm(v):
     try:
         x = float(str(v).replace(",", ".").replace("cm", "").strip())
@@ -238,14 +222,26 @@ def _season_label(season):
 
 
 def _pick_answer(players, puzzle_date):
-    """Stable daily pick: the eligible player with the lowest hash of date + name.
-    Adding a few players to the pool rarely changes the answer during the day."""
+    """Fallback pick (same rule as guess_logic.pick_name) when a day has no frozen answer."""
     pool = players[(players["games"] >= MIN_GAMES_FOR_ANSWER) & (players["mpg"] >= MIN_MPG_FOR_ANSWER)]
     if pool.empty:
         pool = players
-    key = lambda n: hashlib.sha256(f"elstatslab-gtp|{puzzle_date.isoformat()}|{n}".encode()).hexdigest()
-    best = min(pool["name"].tolist(), key=key)
+    best = _pick_name(pool["name"].tolist(), puzzle_date)
     return players[players["name"] == best].iloc[0]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_frozen(day_iso):
+    """The answer frozen for this day by build_public_db.py (table guess_answers), or None."""
+    try:
+        con = sqlite3.connect(_find_db())
+        try:
+            row = con.execute("SELECT name FROM guess_answers WHERE day = ?", (day_iso,)).fetchone()
+        finally:
+            con.close()
+        return row[0] if row else None
+    except Exception:
+        return None
 
 
 # ----------------------------------------------------------------------------
@@ -335,10 +331,10 @@ def _grid_html(guesses, answer):
     return _CSS + '<div class="gtp-wrap">' + head + "".join(rows) + "</div>"
 
 
-def _share_text(number, guesses, answer, won):
+def _share_text(day, guesses, answer, won):
     score = f"{len(guesses)}/{MAX_GUESSES}" if won else f"X/{MAX_GUESSES}"
-    sym = {"ok": "🟩", "close": "🟧", "no": "⬛", "na": "⬜"}
-    lines = [f"ELSTATSLAB Guess the Player #{number} {score}", ""]
+    sym = {"ok": "🟩", "close": "🟧", "no": "🟦", "na": "⬜"}
+    lines = [f"ELSTATSLAB Guess the Player {_date_label(day)} {score}", ""]
     for g in guesses:
         c = _compare(g, answer)
         lines.append("".join(sym[c[k][0]] for k, _, _ in ATTRS))
@@ -351,9 +347,9 @@ def _share_text(number, guesses, answer, won):
 # ----------------------------------------------------------------------------
 def render_guess_game():
     today = _today()
-    number = _puzzle_number(today)
+    number = today.isoformat()   # used only to key the session state
 
-    st.subheader(f"Guess the Player #{number}")
+    st.subheader(f"Guess the Player: {_date_label(today)}")
     try:
         players, season = _load_players(today.isoformat())
     except Exception as e:
@@ -363,7 +359,14 @@ def render_guess_game():
         st.info("The game opens as soon as the first games of the season are in the database.")
         return
 
-    answer = _pick_answer(players, today)
+    answer = None
+    frozen = _load_frozen(today.isoformat())
+    if frozen:
+        match = players[players["name"] == frozen]
+        if not match.empty:
+            answer = match.iloc[0]
+    if answer is None:
+        answer = _pick_answer(players, today)
 
     with st.expander("How to play", expanded=False):
         st.markdown(
@@ -373,7 +376,7 @@ You have **{MAX_GUESSES} guesses**. After each guess you see how that player com
 
 * 🟩 **Green**: same value
 * 🟧 **Orange**: close (age within {CLOSE_AGE} years, height within {CLOSE_HEIGHT} cm, minutes within {CLOSE_MIN:g}, PIR within {CLOSE_PIR:g})
-* ⬛ **Dark**: not a match
+* 🟦 **Dark blue**: not a match
 * ▲ the mystery value is higher, ▼ it is lower
 
 NAT is the nationality listed on the official EuroLeague player profile, which can differ from the national team a player represents.
@@ -386,6 +389,9 @@ MIN and PIR are per game averages for the {_season_label(season)} season. A new 
     skey = f"gtp_guesses_{number}"
     if skey not in st.session_state:
         st.session_state[skey] = []
+    # Refresh the stored guesses with the latest stats (the database may have been updated mid session)
+    latest = {r["name"]: r for r in players.to_dict("records")}
+    st.session_state[skey] = [latest.get(g["name"], g) for g in st.session_state[skey]]
     guesses = st.session_state[skey]
 
     won = any(g["name"] == answer["name"] for g in guesses)
@@ -439,5 +445,5 @@ MIN and PIR are per game averages for the {_season_label(season)} season. A new 
         else:
             st.error(f"Out of guesses. The mystery player was {answer['label']} ({answer['team']}).")
         st.markdown("**Share your result on X**")
-        st.code(_share_text(number, guesses, answer, won), language=None)
+        st.code(_share_text(today, guesses, answer, won), language=None)
         st.caption("Next player at midnight, Paris time.")
