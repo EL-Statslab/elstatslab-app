@@ -172,10 +172,25 @@ def get_season_team_codes(season: int) -> list[str]:
 # par toutes les pages (évite d'ouvrir/fermer une connexion par
 # requête et respecte le mode lecture seule utilisé par app.py)
 # ============================================================
-@st.cache_resource
-def get_conn():
-    uri = f"file:{DB_PATH}?mode=ro"
+def _db_mtime() -> float:
+    """Date de modification du fichier de base, utilisee comme cle de cache."""
+    try:
+        return DB_PATH.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+@st.cache_resource(max_entries=2)
+def _open_conn(path: str, mtime: float):
+    # mtime fait partie de la cle de cache : quand le fichier .db est remplace
+    # (nouveau deploiement), une nouvelle connexion est ouverte au lieu de
+    # garder l'ancienne, qui continuerait de lire l'ancienne version du fichier.
+    uri = f"file:{path}?mode=ro"
     return sqlite3.connect(uri, uri=True, check_same_thread=False)
+
+
+def get_conn():
+    return _open_conn(str(DB_PATH), _db_mtime())
 
 
 def read_sql(query: str, params: tuple = ()) -> pd.DataFrame:
