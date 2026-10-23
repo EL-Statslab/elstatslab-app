@@ -42,6 +42,7 @@ import lineup_tab
 import team_rankings
 import team_rankings_export
 import live_tab
+import guess_the_player
 
 # =============================================================================
 # CONFIG
@@ -3970,16 +3971,16 @@ def main():
         st.caption("Independent EuroLeague analytics. Built by @EL_Statslab.")
 
     _tab_labels = ["📊 Match Center", "🛡️ Team Cards", "📈 Team Rankings", "🎯 Shot Maps",
-                   "🧩 Lineup", "📖 Methodology"]
+                   "🧩 Lineup", "🕵️ Guess the Player", "📖 Methodology"]
     # Lazy tabs: only the selected tab is computed (much faster first load).
     # Falls back to the old behaviour (all tabs computed) if this Streamlit
     # version does not support it.
     try:
-        tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_method = st.tabs(
+        tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_game, tab_method = st.tabs(
             _tab_labels, on_change="rerun", key="main_tabs")
         _lazy_tabs = True
     except TypeError:
-        tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_method = st.tabs(_tab_labels)
+        tab_match, tab_cards, tab_rankings, tab_shots, tab_lineup, tab_game, tab_method = st.tabs(_tab_labels)
         _lazy_tabs = False
 
     def _tab_is_open(tab) -> bool:
@@ -4035,6 +4036,11 @@ def main():
                     elstatslab_logo=ELSTATSLAB_LOGO,
                     team_logo_fn=logo_path,
                 )
+
+    with tab_game:
+        if _tab_is_open(tab_game):
+            with _perf("guess the player"):
+                guess_the_player.render_guess_game()
 
     with tab_method:
         if _tab_is_open(tab_method):
