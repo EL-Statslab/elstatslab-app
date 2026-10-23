@@ -381,21 +381,33 @@ MIN and PIR are per game averages for the {_season_label(season)} season. A new 
     if not over:
         used = {g["name"] for g in guesses}
         options = [r for r in players.to_dict("records") if r["name"] not in used]
+        teams = sorted({str(r["team"]) for r in options if r["team"]})
+
+        c0, c1, c2 = st.columns([2, 3, 1])
+        team_choice = c0.selectbox(
+            "Team",
+            teams,
+            index=None,
+            placeholder="Team (optional)",
+            key=f"gtp_team_{number}_{len(guesses)}",
+            label_visibility="collapsed",
+        )
+        pool = [r for r in options if team_choice is None or str(r["team"]) == team_choice]
+
         by_label = {}
-        for r in options:
+        for r in pool:
             lab = r["label"]
             if lab in by_label:  # same display name twice, keep both
                 lab = f'{lab} ({r["team"]})'
             by_label[lab] = r
         labels = list(by_label.keys())
 
-        c1, c2 = st.columns([4, 1])
         choice = c1.selectbox(
             "Your guess",
             labels,
             index=None,
-            placeholder="Type a player name",
-            key=f"gtp_sel_{number}_{len(guesses)}",
+            placeholder="Pick a player" if team_choice else "Type a player name",
+            key=f"gtp_sel_{number}_{len(guesses)}_{team_choice}",
             label_visibility="collapsed",
         )
         if c2.button("Guess", use_container_width=True, disabled=choice is None, key=f"gtp_btn_{number}_{len(guesses)}"):
