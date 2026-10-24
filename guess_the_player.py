@@ -25,6 +25,7 @@ from guess_logic import (
     MIN_MPG_FOR_ANSWER,
     parse_minutes as _parse_minutes,
     pick_name as _pick_name,
+    eligible_from_summary as _eligible_from_summary,
     today_paris as _today_paris,
 )
 
@@ -223,10 +224,10 @@ def _season_label(season):
 
 def _pick_answer(players, puzzle_date):
     """Fallback pick (same rule as guess_logic.pick_name) when a day has no frozen answer."""
-    pool = players[(players["games"] >= MIN_GAMES_FOR_ANSWER) & (players["mpg"] >= MIN_MPG_FOR_ANSWER)]
-    if pool.empty:
-        pool = players
-    best = _pick_name(pool["name"].tolist(), puzzle_date)
+    names = _eligible_from_summary(zip(players["name"], players["games"], players["mpg"]))
+    if not names:
+        names = players["name"].tolist()
+    best = _pick_name(names, puzzle_date)
     return players[players["name"] == best].iloc[0]
 
 
