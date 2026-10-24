@@ -1045,7 +1045,13 @@ V5_H2H_MIN_GAMES = 4
 
 # Home win rate in regular season games from 2022 to 2025: 823 wins in 1298 games.
 V5_HOME_WIN_RATE = 823 / 1298
-V5_HOME_SHIFT = math.log(V5_HOME_WIN_RATE / (1 - V5_HOME_WIN_RATE))
+V5_HOME_SHIFT = math.log(V5_HOME_WIN_RATE / (1 - V5_HOME_WIN_RATE))   # starting value only
+
+# Adaptive home court advantage (same rule as mc_v5.py): the long run rate above is blended
+# with the home win rate of the current season. V5_HOME_K is the number of games of the season
+# that weigh as much as the long run rate (small: reacts fast, large: reacts slowly).
+V5_HOME_K = 150
+V5_HOME_RATE_MIN, V5_HOME_RATE_MAX = 0.40, 0.80
 
 _V5_W = {"season": 0.40, "h2h": 0.25, "style": 0.15}
 _V5_TOT = sum(_V5_W.values())
@@ -1133,6 +1139,19 @@ _V5_H2H_SQL = f"""
 """
 
 
+_V5_HOME_SQL = f"""
+    SELECT COUNT(*), SUM(CASE WHEN h.Score > a.Score THEN 1 ELSE 0 END)
+    FROM schedule s
+    JOIN team_stats h
+      ON h.Season = s.Season AND h.GameCode = {_V5_GC}
+     AND UPPER(h.TeamName) = UPPER(s.hometeam)
+    JOIN team_stats a
+      ON a.Season = s.Season AND a.GameCode = {_V5_GC}
+     AND UPPER(a.TeamName) = UPPER(s.awayteam)
+    WHERE s.Season = ? AND s.round = 'RS' AND s.played = 'true'
+"""
+
+
 def _v5_team_dist(conn, code, season):
     row = conn.execute(_V5_TEAM_SQL, (season, code, code)).fetchone()
     if row and row[5] and row[5] >= V5_MIN_GAMES:
@@ -1199,6 +1218,18 @@ def _v5_h2h(conn, code_a, code_b, season):
     return {"games": 0, "margin": 0.0}
 
 
+def _v5_home_shift_info(conn, season):
+    """Home court advantage learned on the current season: long run rate and season rate
+    blended with V5_HOME_K, then converted to a log odds shift."""
+    row = conn.execute(_V5_HOME_SQL, (season,)).fetchone()
+    n = int(row[0] or 0) if row else 0
+    wins = int(row[1] or 0) if row else 0
+    rate = (V5_HOME_K * V5_HOME_WIN_RATE + wins) / (V5_HOME_K + n)
+    rate = min(max(rate, V5_HOME_RATE_MIN), V5_HOME_RATE_MAX)
+    return {"rate": rate, "shift": math.log(rate / (1 - rate)), "games": n,
+            "season_rate": (wins / n) if n else None}
+
+
 def v5_predict_match(conn, season, hcode, acode):
     league = _v5_league_dist(conn, season)
     if league is None:
@@ -1242,7 +1273,8 @@ def v5_predict_match(conn, season, hcode, acode):
 
     # 5. Weighted average on a neutral court, then the home court shift
     neutral = _v5_clamp(V5_W_SEASON * current + V5_W_H2H * h2h_prob + V5_W_STYLE * style)
-    p_home = _v5_clamp(_v5_sigmoid(_v5_logit(neutral) + V5_HOME_SHIFT))
+    hshift = _v5_home_shift_info(conn, season)
+    p_home = _v5_clamp(_v5_sigmoid(_v5_logit(neutral) + hshift["shift"]))
 
     return {
         "home_prob": round(p_home, 3),
@@ -1254,7 +1286,10 @@ def v5_predict_match(conn, season, hcode, acode):
             "h2h": round(h2h_prob, 3),
             "style_matchup": round(style, 3),
             "neutral_court": round(neutral, 3),
-            "home_shift": round(V5_HOME_SHIFT, 3),
+            "home_shift": round(hshift["shift"], 3),
+            "home_rate": round(hshift["rate"], 4),
+            "home_season_games": hshift["games"],
+            "home_season_rate": None if hshift["season_rate"] is None else round(hshift["season_rate"], 4),
             "exp_pts_home": round(mu_h, 1),
             "exp_pts_away": round(mu_a, 1),
             "home_games": h["games"],
