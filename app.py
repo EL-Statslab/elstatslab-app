@@ -3996,13 +3996,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    st.markdown(
-        "<div style='background:#14213D;color:#F3EEE4;padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:16px;'>"
-        "ELSTATSLAB has a new home. The faster site is now at "
-        "<a href='https://elstatslab.com/?new=1' target='_blank' rel='noopener' style='color:#FFB38A;font-weight:700;text-decoration:underline;'>elstatslab.com</a>."
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div style='background:#14213D;color:#F3EEE4;padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:16px;'>ELSTATSLAB has a new home. The faster site is now at <a href='https://elstatslab.com/match-center/' target='_blank' rel='noopener' style='color:#FFB38A;font-weight:700;text-decoration:underline;'>elstatslab.com</a>.</div>", unsafe_allow_html=True)
 
     title_col1, title_col2 = st.columns([1, 8], vertical_alignment="center")
     with title_col1:
