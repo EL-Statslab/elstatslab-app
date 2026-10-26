@@ -47,11 +47,14 @@ import guess_the_player
 # =============================================================================
 # CONFIG
 # =============================================================================
+_PUBLIC_DB_HERE = Path(__file__).resolve().parent / "euroleague_public.db"   # the database next to this file comes first
 _PUBLIC_DB_LOCAL = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\ELSTATSLAB_APP\euroleague_public.db")
 _PUBLIC_DB_CLOUD = Path("euroleague_public.db")
 _LOCAL_DB = Path(r"C:\Users\benoi\OneDrive\Bureau\Euroleague_Stats\euroleague.db")
 
-if _PUBLIC_DB_LOCAL.exists():
+if _PUBLIC_DB_HERE.exists():
+    DB_PATH = _PUBLIC_DB_HERE
+elif _PUBLIC_DB_LOCAL.exists():
     DB_PATH = _PUBLIC_DB_LOCAL
 elif _PUBLIC_DB_CLOUD.exists():
     DB_PATH = _PUBLIC_DB_CLOUD
@@ -3990,6 +3993,14 @@ def main():
         }
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "<div style='background:#14213D;color:#F3EEE4;padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:16px;'>"
+        "ELSTATSLAB has a new home. The faster site is now at "
+        "<a href='https://elstatslab.com/?new=1' target='_top' style='color:#FFB38A;font-weight:700;text-decoration:underline;'>elstatslab.com</a>."
+        "</div>",
         unsafe_allow_html=True,
     )
 
